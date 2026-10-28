@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+
+  <title>Задачи</title>
+  <meta name="description" content="Задачи — офлайн-PWA в стиле нативного iOS: списки дел, сроки, приоритеты.">
+
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+
+  <!-- iOS / Safari -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Задачи">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="mask-icon" href="icons/icon.svg" color="#1f5ff0">
+  <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+  <link rel="alternate icon" href="icons/apple-touch-icon.png">
+
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Навбар (появляется при скролле, как large title в iOS) -->
+  <header class="navbar" id="navbar">
+    <div class="navbar-bg"></div>
+    <div class="navbar-title">Задачи</div>
+  </header>
+
+  <main class="content" id="content">
+    <div class="title-row">
+      <h1 class="large-title">Задачи</h1>
+      <span class="offline-pill" id="offlinePill" hidden>офлайн</span>
+    </div>
+
+    <div class="search-wrap">
+      <label class="search">
+        <svg class="search-icon" viewBox="0 0 20 20" aria-hidden="true">
+          <circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" stroke-width="1.8"/>
+          <line x1="12.8" y1="12.8" x2="17" y2="17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+        <input id="search" type="search" placeholder="Поиск" autocomplete="off" enterkeyhint="search">
+      </label>
+    </div>
+
+    <div class="segmented" id="segmented" role="tablist" aria-label="Фильтр задач">
+      <span class="segmented-thumb" id="segThumb"></span>
+      <button class="seg is-active" data-filter="all" role="tab" aria-selected="true">Все</button>
+      <button class="seg" data-filter="today" role="tab" aria-selected="false">Сегодня</button>
+      <button class="seg" data-filter="done" role="tab" aria-selected="false">Готово</button>
+    </div>
+
+    <section class="card" id="list" aria-live="polite"></section>
+
+    <div class="empty" id="empty" hidden>
+      <svg viewBox="0 0 120 120" width="96" height="96" aria-hidden="true">
+        <circle cx="60" cy="60" r="44" fill="none" stroke="currentColor" stroke-width="3" opacity=".25"/>
+        <path d="M42 61 L55 74 L80 47" fill="none" stroke="currentColor" stroke-width="5"
+              stroke-linecap="round" stroke-linejoin="round" opacity=".4"/>
+      </svg>
+      <p id="emptyText">Пока пусто</p>
+    </div>
+
+    <p class="hint" id="swHint" hidden>
+      Приложение установлено офлайн: задачи хранятся на устройстве и доступны без сети.
+    </p>
+  </main>
+
+  <!-- Кнопка «+» -->
+  <button class="fab" id="fab" aria-label="Новая задача">
+    <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">
+      <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+    </svg>
+  </button>
+
+  <!-- Подсказка об установке -->
+  <div class="install-card" id="installCard" hidden>
+    <img src="icons/apple-touch-icon.png" alt="" width="44" height="44">
+    <div class="install-text">
+      <b>Установить на iPhone</b>
+      <span id="installDesc">Safari → «Поделиться» → «На экран “Домой”» — приложение откроется без адресной строки.</span>
+    </div>
+    <button class="install-btn" id="installBtn" hidden>Установить</button>
+    <button class="install-close" id="installClose" aria-label="Скрыть">×</button>
+  </div>
+
+  <!-- Нижняя шторка (bottom sheet) -->
+  <div class="backdrop" id="backdrop" hidden></div>
+  <form class="sheet" id="sheet" hidden>
+    <div class="sheet-grip" id="sheetGrip"></div>
+    <div class="sheet-nav">
+      <button type="button" class="sheet-cancel" id="sheetCancel">Отмена</button>
+      <span class="sheet-title" id="sheetTitle">Новая задача</span>
+      <button type="submit" class="sheet-save" id="sheetSave">Готово</button>
+    </div>
+    <div class="sheet-body">
+      <input id="taskTitle" class="field-title" type="text" placeholder="Название" autocomplete="off" maxlength="140" required>
+      <textarea id="taskNote" class="field-note" placeholder="Заметка" rows="3" maxlength="500"></textarea>
+
+      <div class="sheet-group">
+        <div class="sheet-row">
+          <label for="taskDate">Срок</label>
+          <input id="taskDate" type="date">
+        </div>
+        <div class="sheet-row">
+          <span>Приоритет</span>
+          <div class="segmented segmented-small" id="prioSeg">
+            <span class="segmented-thumb"></span>
+            <button type="button" class="seg is-active" data-prio="0">Обычный</button>
+            <button type="button" class="seg" data-prio="1">Важно</button>
+            <button type="button" class="seg" data-prio="2">Срочно</button>
+          </div>
+        </div>
+      </div>
+
+      <button type="button" class="destructive" id="sheetDelete" hidden>Удалить задачу</button>
+    </div>
+  </form>
+
+  <div class="toast" id="toast" hidden>
+    <span id="toastText"></span>
+    <button id="toastAction">Вернуть</button>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
