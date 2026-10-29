@@ -1,0 +1,16 @@
+{
+  "name": "pwa-tasks",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Офлайн-PWA «список дел» в стиле нативного iOS. Без сборки и рантайм-зависимостей.",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node serve.js 8080",
+    "test": "node tools/test/smoke.mjs",
+    "icons": "node tools/gen-icons.js"
+  },
+  "devDependencies": {
+    "jsdom": "^29.1.1"
+  },
+  "license": "MIT"
+}

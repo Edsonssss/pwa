@@ -1,5 +1,5 @@
 /* Service Worker: офлайн-оболочка приложения. */
-const VERSION = 'v1.0.0';
+const VERSION = 'v1.1.0';
 const CACHE = `pwa-tasks-${VERSION}`;
 
 const PRECACHE = [
@@ -9,18 +9,33 @@ const PRECACHE = [
   './app.js',
   './manifest.webmanifest',
   './icons/icon.svg',
+  './icons/mask-icon.svg',
   './icons/apple-touch-icon.png',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-maskable-512.png',
+  './icons/icon-maskable-192.png',
+  './icons/favicon-16.png',
   './icons/favicon-32.png',
 ];
 
+const OFFLINE_HTML = '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Задачи — нет сети</title><body style="font:17px -apple-system,system-ui,sans-serif;display:grid;place-items:center;height:100vh;margin:0;background:#f2f2f7;color:#000"><div style="text-align:center;padding:24px"><h1 style="font-size:22px;margin:0 0 8px">Нет подключения</h1><p style="margin:0;opacity:.6">Приложение откроется, когда появится сеть или когда оболочка будет в кэше.</p></div>';
+
+function offlineResponse() {
+  return caches.match('./index.html').then((hit) =>
+    hit || new Response(OFFLINE_HTML, {
+      status: 503,
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    })
+  );
+}
+
 self.addEventListener('install', (event) => {
+  // Без skipWaiting: новый SW встаёт в очередь, клиент сам решает, когда
+  // обновиться (тост «Доступна новая версия»), чтобы не рвать живую сессию.
   event.waitUntil(
     caches.open(CACHE)
       .then((cache) => cache.addAll(PRECACHE))
-      .then(() => self.skipWaiting())
   );
 });
 
@@ -43,7 +58,7 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return; // чужие origin не трогаем
 
-  // Навигация: сеть → кэш (офлайн открываем оболочку)
+  // Навигация: сеть → кэш (офлайн открываем оболочку или офлайн-страницу)
   if (req.mode === 'navigate') {
     event.respondWith(
       fetch(req)
@@ -52,12 +67,12 @@ self.addEventListener('fetch', (event) => {
           caches.open(CACHE).then((c) => c.put('./index.html', copy));
           return res;
         })
-        .catch(() => caches.match('./index.html'))
+        .catch(() => offlineResponse())
     );
     return;
   }
 
-  // Статика: stale-while-revalidate
+  // Статика: stale-while-revalidate, с фолбэком вместо respondWith(undefined)
   event.respondWith(
     caches.match(req).then((cached) => {
       const network = fetch(req)
@@ -68,7 +83,7 @@ self.addEventListener('fetch', (event) => {
           }
           return res;
         })
-        .catch(() => cached);
+        .catch(() => cached || offlineResponse());
       return cached || network;
     })
   );

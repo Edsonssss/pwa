@@ -15,10 +15,13 @@
   <!-- iOS / Safari -->
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
+  <!-- black-translucent — единственный способ получить fullscreen на iOS ≤ 25.
+       На iOS 26+ мета-теги статус-бара игнорируются: цвет полосы задаёт
+       .statusbar-strip (position: fixed у верха), см. styles.css -->
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Задачи">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-  <link rel="mask-icon" href="icons/icon.svg" color="#1f5ff0">
+  <link rel="mask-icon" href="icons/mask-icon.svg" color="#1f5ff0">
   <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
   <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
   <link rel="alternate icon" href="icons/apple-touch-icon.png">
@@ -26,6 +29,10 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <!-- Сплошная полоса у верха: на iOS 27+ именно fixed-элемент с фоном
+       убирает blur под статус-баром (высота ≥6px, ширина ≥80%, у верха ≤4px) -->
+  <div class="statusbar-strip" aria-hidden="true"></div>
+
   <!-- Навбар (появляется при скролле, как large title в iOS) -->
   <header class="navbar" id="navbar">
     <div class="navbar-bg"></div>
@@ -44,18 +51,19 @@
           <circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" stroke-width="1.8"/>
           <line x1="12.8" y1="12.8" x2="17" y2="17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
         </svg>
-        <input id="search" type="search" placeholder="Поиск" autocomplete="off" enterkeyhint="search">
+        <input id="search" type="search" placeholder="Поиск" aria-label="Поиск по задачам"
+               autocomplete="off" enterkeyhint="search">
       </label>
     </div>
 
-    <div class="segmented" id="segmented" role="tablist" aria-label="Фильтр задач">
+    <div class="segmented" id="segmented" role="group" aria-label="Фильтр задач">
       <span class="segmented-thumb" id="segThumb"></span>
-      <button class="seg is-active" data-filter="all" role="tab" aria-selected="true">Все</button>
-      <button class="seg" data-filter="today" role="tab" aria-selected="false">Сегодня</button>
-      <button class="seg" data-filter="done" role="tab" aria-selected="false">Готово</button>
+      <button class="seg is-active" data-filter="all" aria-pressed="true">Все</button>
+      <button class="seg" data-filter="today" aria-pressed="false">Сегодня</button>
+      <button class="seg" data-filter="done" aria-pressed="false">Готово</button>
     </div>
 
-    <section class="card" id="list" aria-live="polite"></section>
+    <section class="card" id="list"></section>
 
     <div class="empty" id="empty" hidden>
       <svg viewBox="0 0 120 120" width="96" height="96" aria-hidden="true">
@@ -69,6 +77,21 @@
     <p class="hint" id="swHint" hidden>
       Приложение установлено офлайн: задачи хранятся на устройстве и доступны без сети.
     </p>
+
+    <!-- Предупреждение об изоляции хранилища (первый запуск установленного PWA) -->
+    <div class="banner" id="storageBanner" role="note" hidden>
+      <span id="storageBannerText">
+        Задачи хранятся только внутри этого приложения: iOS не переносит данные из Safari
+        при установке ярлыка. Делайте резервную копию через «Экспорт».
+      </span>
+      <button class="banner-close" id="storageBannerClose" aria-label="Скрыть предупреждение">×</button>
+    </div>
+
+    <div class="data-row">
+      <button class="data-btn" id="exportBtn">Экспорт</button>
+      <button class="data-btn" id="importBtn">Импорт</button>
+      <input type="file" id="importFile" accept=".json,application/json" hidden>
+    </div>
   </main>
 
   <!-- Кнопка «+» -->
@@ -91,7 +114,7 @@
 
   <!-- Нижняя шторка (bottom sheet) -->
   <div class="backdrop" id="backdrop" hidden></div>
-  <form class="sheet" id="sheet" hidden>
+  <form class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" hidden>
     <div class="sheet-grip" id="sheetGrip"></div>
     <div class="sheet-nav">
       <button type="button" class="sheet-cancel" id="sheetCancel">Отмена</button>
@@ -105,15 +128,22 @@
       <div class="sheet-group">
         <div class="sheet-row">
           <label for="taskDate">Срок</label>
-          <input id="taskDate" type="date">
+          <span class="date-wrap">
+            <input id="taskDate" type="date" aria-label="Срок выполнения">
+            <button type="button" class="date-clear" id="taskDateClear" aria-label="Убрать срок" hidden>
+              <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
+                <path d="M2 2 L10 10 M10 2 L2 10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              </svg>
+            </button>
+          </span>
         </div>
         <div class="sheet-row">
-          <span>Приоритет</span>
-          <div class="segmented segmented-small" id="prioSeg">
+          <span id="prioLabel">Приоритет</span>
+          <div class="segmented segmented-small" id="prioSeg" role="group" aria-labelledby="prioLabel">
             <span class="segmented-thumb"></span>
-            <button type="button" class="seg is-active" data-prio="0">Обычный</button>
-            <button type="button" class="seg" data-prio="1">Важно</button>
-            <button type="button" class="seg" data-prio="2">Срочно</button>
+            <button type="button" class="seg is-active" data-prio="0" aria-pressed="true">Обычный</button>
+            <button type="button" class="seg" data-prio="1" aria-pressed="false">Важно</button>
+            <button type="button" class="seg" data-prio="2" aria-pressed="false">Срочно</button>
           </div>
         </div>
       </div>
@@ -122,10 +152,17 @@
     </div>
   </form>
 
-  <div class="toast" id="toast" hidden>
+  <div class="toast" id="toast" role="status" hidden>
     <span id="toastText"></span>
     <button id="toastAction">Вернуть</button>
   </div>
+
+  <!-- Вежливый анонс для скринридеров (счётчик/результат), вместо aria-live на всём списке -->
+  <p class="visually-hidden" id="liveStatus" role="status" aria-live="polite"></p>
+
+  <noscript>
+    <p class="hint">Для работы приложения нужен включённый JavaScript.</p>
+  </noscript>
 
   <script src="app.js"></script>
 </body>

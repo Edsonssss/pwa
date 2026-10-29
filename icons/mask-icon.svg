@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Монохромный силуэт для Safari (mask-icon): используется только альфа-канал.
+       Фон прозрачный, форма — галочка; цвет задаёт атрибут color у <link>. -->
+  <path d="M128 272 L226 366 L392 178" fill="none" stroke="#000" stroke-width="52"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

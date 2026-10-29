@@ -21,6 +21,7 @@
     taskTitle: $('#taskTitle'),
     taskNote: $('#taskNote'),
     taskDate: $('#taskDate'),
+    taskDateClear: $('#taskDateClear'),
     prioSeg: $('#prioSeg'),
     installCard: $('#installCard'),
     installBtn: $('#installBtn'),
@@ -28,9 +29,15 @@
     installDesc: $('#installDesc'),
     offlinePill: $('#offlinePill'),
     swHint: $('#swHint'),
+    storageBanner: $('#storageBanner'),
+    storageBannerClose: $('#storageBannerClose'),
+    exportBtn: $('#exportBtn'),
+    importBtn: $('#importBtn'),
+    importFile: $('#importFile'),
     toast: $('#toast'),
     toastText: $('#toastText'),
     toastAction: $('#toastAction'),
+    liveStatus: $('#liveStatus'),
   };
 
   /** @type {{tasks: Array<object>, filter: string, query: string}} */
@@ -39,17 +46,39 @@
   let lastDeleted = null;
   let deferredPrompt = null;
   let lastViewKey = null;
+  let swReg = null;
 
   /* ---------------- хранилище ---------------- */
   function load() {
     try {
       const raw = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
-      if (Array.isArray(raw?.tasks)) return raw.tasks;
+      if (Array.isArray(raw?.tasks)) return raw.tasks.map(normalizeTask).filter(Boolean);
     } catch { /* повреждённые данные — начинаем заново */ }
     return seed();
   }
+  function normalizeTask(t) {
+    if (!t || typeof t !== 'object' || typeof t.title !== 'string' || !t.title.trim()) return null;
+    return {
+      id: typeof t.id === 'string' ? t.id : uid(),
+      title: t.title.slice(0, 140),
+      note: typeof t.note === 'string' ? t.note.slice(0, 500) : '',
+      due: typeof t.due === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(t.due) ? t.due : '',
+      prio: [0, 1, 2].includes(t.prio) ? t.prio : 0,
+      done: !!t.done,
+      createdAt: Number(t.createdAt) || Date.now(),
+      completedAt: Number(t.completedAt) || null,
+    };
+  }
+  /** Сохранение с обработкой переполнения/недоступности хранилища.
+      Возвращает false, если записать не удалось (UI тогда не мутируем). */
   function save() {
-    localStorage.setItem(STORE_KEY, JSON.stringify({ tasks: state.tasks }));
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify({ v: 2, tasks: state.tasks }));
+      return true;
+    } catch (e) {
+      showToast('Не удалось сохранить: хранилище недоступно');
+      return false;
+    }
   }
   function seed() {
     const t = todayStr();
@@ -72,29 +101,32 @@
     d.setDate(d.getDate() + n);
     return todayStr(d);
   }
-  function dueLabel(due) {
+  // Форматтеры Intl создаются один раз (ранее — новый на каждую строку каждый рендер)
+  const fmtShort = new Intl.DateTimeFormat('ru', { day: 'numeric', month: 'short' });
+  const fmtFull = new Intl.DateTimeFormat('ru', { day: 'numeric', month: 'short', year: 'numeric' });
+
+  function dueLabel(due, today, tomorrow, yesterday) {
     if (!due) return '';
-    if (due === todayStr()) return 'Сегодня';
-    if (due === shiftDays(1)) return 'Завтра';
-    if (due === shiftDays(-1)) return 'Вчера';
+    if (due === today) return 'Сегодня';
+    if (due === tomorrow) return 'Завтра';
+    if (due === yesterday) return 'Вчера';
     const [y, m, d] = due.split('-').map(Number);
     const date = new Date(y, m - 1, d);
-    const sameYear = y === new Date().getFullYear();
-    return new Intl.DateTimeFormat('ru', sameYear ? { day: 'numeric', month: 'short' } : { day: 'numeric', month: 'short', year: 'numeric' }).format(date);
+    return (y === new Date().getFullYear() ? fmtShort : fmtFull).format(date);
   }
-  function dueClass(due, done) {
+  function dueClass(due, done, today) {
     if (!due || done) return '';
-    if (due < todayStr()) return 'overdue';
-    if (due === todayStr()) return 'today';
+    if (due < today) return 'overdue';
+    if (due === today) return 'today';
     return '';
   }
 
   /* ---------------- выборка и сортировка ---------------- */
-  function visibleTasks() {
+  function visibleTasks(today) {
     const q = state.query.trim().toLowerCase();
     let list = state.tasks.filter((t) => {
       if (state.filter === 'done' && !t.done) return false;
-      if (state.filter === 'today' && t.due !== todayStr()) return false;
+      if (state.filter === 'today' && t.due !== today) return false;
       if (q && !(t.title + ' ' + (t.note || '')).toLowerCase().includes(q)) return false;
       return true;
     });
@@ -114,31 +146,53 @@
   /* ---------------- рендер ---------------- */
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-  function rowHTML(t) {
+  function rowHTML(t, today, tomorrow, yesterday) {
     const meta = [];
-    if (t.due) meta.push(`<span class="due ${dueClass(t.due, t.done)}">${esc(dueLabel(t.due))}</span>`);
+    if (t.due) meta.push(`<span class="due ${dueClass(t.due, t.done, today)}">${esc(dueLabel(t.due, today, tomorrow, yesterday))}</span>`);
     if (t.prio > 0 && !t.done) meta.push(`<span class="prio ${t.prio === 2 ? 'p2' : ''}" title="${t.prio === 2 ? 'Срочно' : 'Важно'}"></span>`);
+    const label = esc(t.title);
     return `
       <div class="row ${t.done ? 'done' : ''}" data-id="${t.id}">
-        <button class="row-delete" data-act="delete">Удалить</button>
+        <button class="row-delete" data-act="delete" aria-label="Удалить задачу: ${label}">Удалить</button>
         <div class="row-track" data-act="edit">
-          <button class="check" data-act="toggle" aria-label="Отметить выполненной">
+          <span class="check" role="switch" tabindex="0" data-act="toggle"
+                aria-checked="${t.done ? 'true' : 'false'}" aria-label="${label}">
             <svg viewBox="0 0 16 16" aria-hidden="true">
               <path d="M3 8.4 L6.4 11.8 L13 4.6" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
+          </span>
+          <button type="button" class="row-edit" data-act="edit" aria-label="Изменить задачу: ${label}">
+            <span class="row-main">
+              <span class="row-title">${label}</span>
+              ${t.note ? `<span class="row-note">${esc(t.note)}</span>` : ''}
+            </span>
+            ${meta.length ? `<span class="row-meta">${meta.join('')}</span>` : ''}
           </button>
-          <div class="row-main">
-            <div class="row-title">${esc(t.title)}</div>
-            ${t.note ? `<div class="row-note">${esc(t.note)}</div>` : ''}
-          </div>
-          ${meta.length ? `<div class="row-meta">${meta.join('')}</div>` : ''}
         </div>
       </div>`;
   }
 
-  function render() {
-    const list = visibleTasks();
-    els.list.innerHTML = list.map(rowHTML).join('');
+  function render(announce = false) {
+    // Возврат фокуса: пересборка innerHTML раньше сбрасывала его на <body>
+    let restoreSel = null;
+    const active = document.activeElement;
+    if (active && active.closest && active.closest('#list')) {
+      const row = active.closest('.row');
+      const act = (active.dataset && active.dataset.act) || (active.closest('[data-act]') || {}).dataset?.act;
+      if (row && act) restoreSel = `.row[data-id="${row.dataset.id}"] [data-act="${act}"]`;
+    }
+
+    const today = todayStr();
+    const tomorrow = shiftDays(1);
+    const yesterday = shiftDays(-1);
+    const list = visibleTasks(today);
+    els.list.innerHTML = list.map((t) => rowHTML(t, today, tomorrow, yesterday)).join('');
+
+    if (restoreSel) {
+      const el = els.list.querySelector(restoreSel);
+      if (el) el.focus({ preventScroll: true });
+    }
+
     els.empty.hidden = list.length > 0;
     if (!list.length) {
       els.emptyText.textContent = state.query
@@ -147,17 +201,22 @@
         : state.filter === 'today' ? 'На сегодня задач нет'
         : 'Пока пусто — нажмите «+»';
     }
-    const active = state.tasks.filter((t) => !t.done).length;
-    document.title = active ? `Задачи (${active})` : 'Задачи';
+    const activeCount = state.tasks.filter((t) => !t.done).length;
+    document.title = activeCount ? `Задачи (${activeCount})` : 'Задачи';
 
-    // стаггер-анимация только при смене вкладки/поиска, а не на каждое действие
     const viewKey = `${state.filter}|${state.query}`;
     if (viewKey !== lastViewKey) {
       lastViewKey = viewKey;
+      announce = true;
       list.slice(0, 8).forEach((_, i) => {
         const row = els.list.children[i];
         if (row) { row.classList.add('enter'); row.style.animationDelay = `${i * 22}ms`; }
       });
+    }
+    if (announce) {
+      els.liveStatus.textContent = list.length
+        ? `Показано задач: ${list.length}`
+        : els.emptyText.textContent;
     }
   }
 
@@ -165,23 +224,27 @@
   function toggle(id) {
     const t = state.tasks.find((x) => x.id === id);
     if (!t) return;
-    t.done = !t.done;
+    const was = t.done, wasAt = t.completedAt;
+    t.done = !was;
     t.completedAt = t.done ? Date.now() : null;
-    save(); render();
+    if (!save()) { t.done = was; t.completedAt = wasAt; return; }
+    render();
   }
   function remove(id) {
     const idx = state.tasks.findIndex((x) => x.id === id);
     if (idx < 0) return;
-    lastDeleted = { task: state.tasks[idx], idx };
-    state.tasks.splice(idx, 1);
-    save(); render();
-    showToast('Задача удалена');
+    const [task] = state.tasks.splice(idx, 1);
+    if (!save()) { state.tasks.splice(idx, 0, task); return; }
+    lastDeleted = { task, idx };
+    render();
+    showToast('Задача удалена', 'Вернуть', restore);
   }
   function restore() {
     if (!lastDeleted) return;
     state.tasks.splice(Math.min(lastDeleted.idx, state.tasks.length), 0, lastDeleted.task);
     lastDeleted = null;
-    save(); render();
+    if (!save()) return;
+    render();
     hideToast();
   }
 
@@ -229,6 +292,15 @@
     else if (act === 'delete') remove(row.dataset.id);
     else if (act === 'edit') openSheet(row.dataset.id);
   });
+  // Клавиатура: switch-галочка активируется Enter/Space
+  els.list.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const t = e.target.closest('[data-act="toggle"]');
+    if (!t) return;
+    e.preventDefault();
+    const row = t.closest('.row');
+    if (row) toggle(row.dataset.id);
+  });
 
   /* ---------------- фильтры и поиск ---------------- */
   els.segmented.addEventListener('click', (e) => {
@@ -237,21 +309,29 @@
     state.filter = btn.dataset.filter;
     els.segmented.querySelectorAll('.seg').forEach((b) => {
       b.classList.toggle('is-active', b === btn);
-      b.setAttribute('aria-selected', b === btn ? 'true' : 'false');
+      b.setAttribute('aria-pressed', b === btn ? 'true' : 'false');
     });
     const idx = [...els.segmented.querySelectorAll('.seg')].indexOf(btn);
     els.segThumb.style.transform = `translateX(${idx * 100}%)`;
-    render();
+    render(true);
   });
 
+  // Дебаунс поиска: ранее список пересобирался на каждый символ
+  let searchTimer = null;
   els.search.addEventListener('input', () => {
-    state.query = els.search.value;
-    render();
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      state.query = els.search.value;
+      render(true);
+    }, 120);
   });
 
   /* ---------------- bottom sheet ---------------- */
   function setPrio(p) {
-    els.prioSeg.querySelectorAll('.seg').forEach((b, i) => b.classList.toggle('is-active', i === p));
+    els.prioSeg.querySelectorAll('.seg').forEach((b, i) => {
+      b.classList.toggle('is-active', i === p);
+      b.setAttribute('aria-pressed', i === p ? 'true' : 'false');
+    });
     const thumb = els.prioSeg.querySelector('.segmented-thumb');
     if (thumb) thumb.style.transform = `translateX(${p * 100}%)`;
   }
@@ -263,19 +343,47 @@
     if (btn) setPrio(Number(btn.dataset.prio));
   });
 
+  let sheetSnapshot = '';
+  let sheetOpener = null;
+  let lockY = 0;
+  const sheetSnapshotNow = () => JSON.stringify([els.taskTitle.value, els.taskNote.value, els.taskDate.value, getPrio()]);
+  const isDirty = () => sheetSnapshotNow() !== sheetSnapshot;
+
+  function lockScroll() {
+    lockY = window.scrollY;
+    document.body.style.top = `-${lockY}px`;
+    document.body.classList.add('sheet-open');
+  }
+  function unlockScroll() {
+    document.body.classList.remove('sheet-open');
+    document.body.style.top = '';
+    window.scrollTo(0, lockY);
+  }
+
+  function syncDateClear() { els.taskDateClear.hidden = !els.taskDate.value; }
+  els.taskDate.addEventListener('input', syncDateClear);
+  els.taskDateClear.addEventListener('click', () => {
+    els.taskDate.value = '';
+    syncDateClear();
+    els.taskDate.focus({ preventScroll: true });
+  });
+
   function openSheet(id = null) {
     editingId = id;
+    sheetOpener = document.activeElement;
     const t = id ? state.tasks.find((x) => x.id === id) : null;
     els.sheetTitle.textContent = t ? 'Задача' : 'Новая задача';
     els.taskTitle.value = t?.title || '';
     els.taskNote.value = t?.note || '';
     els.taskDate.value = t?.due || '';
+    syncDateClear();
     setPrio(t?.prio || 0);
     els.sheetDelete.hidden = !t;
+    sheetSnapshot = sheetSnapshotNow();
 
     els.sheet.hidden = false;
     els.backdrop.hidden = false;
-    document.body.classList.add('sheet-open');
+    lockScroll();
     requestAnimationFrame(() => {
       els.sheet.classList.add('show');
       els.backdrop.classList.add('show');
@@ -286,14 +394,39 @@
   function closeSheet() {
     els.sheet.classList.remove('show');
     els.backdrop.classList.remove('show');
-    document.body.classList.remove('sheet-open');
     els.taskTitle.blur();
-    setTimeout(() => { els.sheet.hidden = true; els.backdrop.hidden = true; els.sheet.style.bottom = ''; }, 420);
+    setTimeout(() => {
+      els.sheet.hidden = true;
+      els.backdrop.hidden = true;
+      els.sheet.style.bottom = '';
+      unlockScroll();
+      if (sheetOpener && document.contains(sheetOpener)) sheetOpener.focus({ preventScroll: true });
+      sheetOpener = null;
+    }, 420);
+  }
+
+  function requestClose() {
+    if (isDirty() && !window.confirm('Закрыть без сохранения? Несохранённые правки будут потеряны.')) return;
+    closeSheet();
   }
 
   els.fab.addEventListener('click', () => openSheet());
-  els.sheetCancel.addEventListener('click', closeSheet);
-  els.backdrop.addEventListener('click', closeSheet);
+  els.sheetCancel.addEventListener('click', requestClose);
+  els.backdrop.addEventListener('click', requestClose);
+
+  // Ловушка фокуса внутри диалога
+  els.sheet.addEventListener('keydown', (e) => {
+    if (e.key !== 'Tab') return;
+    const focusables = [...els.sheet.querySelectorAll('button, input, textarea, [tabindex="0"]')]
+      .filter((el) => !el.hidden && !el.disabled);
+    if (!focusables.length) return;
+    const first = focusables[0], last = focusables[focusables.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !els.sheet.hidden) requestClose();
+  });
 
   els.sheet.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -301,11 +434,15 @@
     if (!title) { els.taskTitle.focus(); return; }
     const data = { title, note: els.taskNote.value.trim(), due: els.taskDate.value, prio: getPrio() };
     if (editingId) {
-      Object.assign(state.tasks.find((x) => x.id === editingId), data);
+      const t = state.tasks.find((x) => x.id === editingId);
+      const backup = { ...t };
+      Object.assign(t, data);
+      if (!save()) { Object.assign(t, backup); return; }
     } else {
       state.tasks.push({ id: uid(), ...data, done: false, createdAt: Date.now(), completedAt: null });
+      if (!save()) { state.tasks.pop(); return; }
     }
-    save(); render(); closeSheet();
+    render(true); closeSheet();
   });
 
   els.sheetDelete.addEventListener('click', () => {
@@ -328,7 +465,7 @@
       const dy = e.changedTouches[0].clientY - y0;
       els.sheet.style.transition = '';
       els.sheet.style.transform = '';
-      if (dy > 90) closeSheet();
+      if (dy > 90) requestClose();
       y0 = null;
     });
   })();
@@ -344,10 +481,13 @@
 
   /* ---------------- toast ---------------- */
   let toastTimer = null;
-  function showToast(text) {
+  let toastActionHandler = null;
+  function showToast(text, actionLabel = null, onAction = null) {
     els.toastText.textContent = text;
+    els.toastAction.hidden = !actionLabel;
+    if (actionLabel) els.toastAction.textContent = actionLabel;
+    toastActionHandler = onAction;
     els.toast.hidden = false;
-    els.toastAction.hidden = !lastDeleted;
     requestAnimationFrame(() => els.toast.classList.add('show'));
     clearTimeout(toastTimer);
     toastTimer = setTimeout(hideToast, 5000);
@@ -357,7 +497,11 @@
     clearTimeout(toastTimer);
     setTimeout(() => { els.toast.hidden = true; }, 260);
   }
-  els.toastAction.addEventListener('click', restore);
+  els.toastAction.addEventListener('click', () => {
+    const fn = toastActionHandler;
+    toastActionHandler = null;
+    if (fn) fn(); else hideToast();
+  });
 
   /* ---------------- скролл: large title → navbar ---------------- */
   let ticking = false;
@@ -375,6 +519,43 @@
   addEventListener('online', setOnline);
   addEventListener('offline', setOnline);
   setOnline();
+
+  /* ---------------- экспорт / импорт (страховка от изоляции хранилища iOS) ---------------- */
+  function exportData() {
+    const payload = JSON.stringify({ app: 'pwa-tasks', v: 2, exportedAt: new Date().toISOString(), tasks: state.tasks }, null, 2);
+    const blob = new Blob([payload], { type: 'application/json' });
+    const file = new File([blob], 'pwa-tasks.json', { type: 'application/json' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      navigator.share({ files: [file], title: 'Задачи' }).catch(() => {});
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'pwa-tasks.json';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    showToast('Резервная копия сохранена');
+  }
+  els.exportBtn.addEventListener('click', exportData);
+  els.importBtn.addEventListener('click', () => els.importFile.click());
+  els.importFile.addEventListener('change', async () => {
+    const f = els.importFile.files[0];
+    els.importFile.value = '';
+    if (!f) return;
+    try {
+      const data = JSON.parse(await f.text());
+      const raw = Array.isArray(data) ? data : data?.tasks;
+      if (!Array.isArray(raw)) throw new Error('bad shape');
+      const tasks = raw.map(normalizeTask).filter(Boolean);
+      const backup = state.tasks;
+      state.tasks = tasks;
+      if (!save()) { state.tasks = backup; return; }
+      render(true);
+      showToast(`Импортировано задач: ${tasks.length}`);
+    } catch {
+      showToast('Не удалось прочитать файл импорта');
+    }
+  });
 
   /* ---------------- установка PWA ---------------- */
   const ua = navigator.userAgent;
@@ -409,9 +590,20 @@
     els.installCard.hidden = true;
   });
 
+  // Предупреждение: данные установленного PWA изолированы от Safari (iOS)
+  if (standalone && !localStorage.getItem('pwa-tasks:isolation-shown')) {
+    els.storageBanner.hidden = false;
+  }
+  els.storageBannerClose.addEventListener('click', () => {
+    els.storageBanner.hidden = true;
+    try { localStorage.setItem('pwa-tasks:isolation-shown', '1'); } catch { /* ignore */ }
+  });
+
   /* ---------------- service worker ---------------- */
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js', { scope: './' }).then((reg) => {
+    // updateViaCache:'none' — HTTP-кэш хостинга не должен держать старый sw.js
+    navigator.serviceWorker.register('sw.js', { scope: './', updateViaCache: 'none' }).then((reg) => {
+      swReg = reg;
       const ready = () => {
         if (!localStorage.getItem('pwa-tasks:hint-shown')) {
           els.swHint.hidden = false;
@@ -420,12 +612,28 @@
         }
       };
       if (reg.active) ready();
-      else reg.addEventListener('updatefound', () => {
-        reg.installing?.addEventListener('statechange', (e) => {
-          if (e.target.state === 'activated') ready();
+
+      reg.addEventListener('updatefound', () => {
+        const installing = reg.installing;
+        if (!installing) return;
+        installing.addEventListener('statechange', () => {
+          if (installing.state === 'activated') ready();
+          // Новый SW встал в очередь: предлагаем обновить, а не ломаем сессию skipWaiting
+          if (installing.state === 'installed' && navigator.serviceWorker.controller) {
+            showToast('Доступна новая версия', 'Обновить', () => {
+              reg.waiting?.postMessage('SKIP_WAITING');
+              installing.postMessage?.('SKIP_WAITING');
+              setTimeout(() => location.reload(), 150);
+            });
+          }
         });
       });
     }).catch(() => { /* например, file:// — молча пропускаем */ });
+
+    // Установленное приложение может жить днями без navigation: проверяем обновления сами
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && swReg) swReg.update().catch(() => {});
+    });
   }
 
   /* ---------------- ярлык «Новая задача» (?new=1) ---------------- */
@@ -434,12 +642,18 @@
     setTimeout(() => openSheet(), 300);
   }
 
-  els.list.querySelectorAll('.row').forEach(bindSwipe);
   // делегируем bindSwipe для новых строк
   const mo = new MutationObserver(() => {
     els.list.querySelectorAll('.row:not([data-swipe])').forEach((r) => { r.dataset.swipe = '1'; bindSwipe(r); });
   });
   mo.observe(els.list, { childList: true });
+
+  // Смена суток: метки «Сегодня/Вчера» должны оставаться верными
+  let lastDay = todayStr();
+  setInterval(() => {
+    const now = todayStr();
+    if (now !== lastDay) { lastDay = now; render(); }
+  }, 60000);
 
   render();
 })();
