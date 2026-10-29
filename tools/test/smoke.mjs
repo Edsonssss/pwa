@@ -322,7 +322,7 @@ b$('#authPassword').value = 'password123';
 b$('#authFields').dispatchEvent(new B.w.Event('submit', { bubbles: true, cancelable: true }));
 await sleep(150);
 const failMsg = b$('#authError').textContent;
-ok('при недоступном API показана причина, а не «проверьте сеть»', !b$('#authError').hidden && /статического хостинга|нет API|server\.js/i.test(failMsg), failMsg);
+ok('при сбое сети показана конкретная причина', !b$('#authError').hidden && /Не удалось связаться с сервером/i.test(failMsg), failMsg);
 ok('индикатор сервера переключился в ошибку', b$('#serverState').className.includes('bad'), b$('#serverState').className);
 ok('аккаунт не создан, задачи не тронуты', !B.store['pwa-tasks:account'] && B.w.__pwa.state.tasks.length === 3);
 B.w.fetch = goodFetch;
@@ -408,6 +408,36 @@ await sleep(600);
 ok('после выхода аккаунт удалён', !B.store['pwa-tasks:account']);
 ok('после выхода видны локальные задачи', JSON.parse(B.store['pwa-tasks:v1']).tasks.length > 0);
 ok('чип аккаунта вернулся в анонимное состояние', b$('#acctInitials').textContent === '•');
+
+/* =======================================================================
+   ЧАСТЬ 3: статический хостинг (GitHub Pages) — API нет вовсе
+   ======================================================================= */
+section('\nСтатический хостинг: локальный режим');
+const staticFetch = async (url) => {
+  const route = new URL(String(url), 'https://local').pathname;
+  if (route.startsWith('/api/')) {
+    return { ok: false, status: 404, json: async () => { throw new Error('not json'); }, text: async () => '<html>404</html>' };
+  }
+  throw new TypeError('статика в тесте не отдаётся');
+};
+const C = createEnv({ url: 'https://user.github.io/pwa/', fetch: staticFetch });
+await sleep(200);
+const c$ = C.$;
+ok('нет ошибок при загрузке на статике', C.problems.length === 0, C.problems.join(' | '));
+ok('зонд понял, что API нет (404/HTML)', /Локальный режим/.test(c$('#serverState').textContent), c$('#serverState').textContent);
+ok('задачи работают без сервера', C.$$('#list .row').length === 3);
+C.click(c$('#acctBtn'));
+await sleep(150);
+ok('кнопки «Войти»/«Создать аккаунт» скрыты', c$('#authButtons').hidden === true);
+ok('вместо них — объяснение про локальный режим', c$('#localOnlyNote').hidden === false && /Экспорт \.json/.test(c$('#localOnlyNote').textContent));
+ok('точка синхронизации не пугает красным', !c$('#acctDot').className.includes('error'), c$('#acctDot').className);
+ok('адрес внешнего API всё ещё можно задать', !!c$('#apiBase') && c$('#apiBase').closest('details') !== null);
+C.downloads.length = 0;
+C.click(c$('#exportBtn'));
+await sleep(60);
+ok('экспорт .json работает без сервера', /^pwa-tasks-\d{4}-\d{2}-\d{2}\.json$/.test(C.downloads[C.downloads.length - 1]?.name || ''), C.downloads[C.downloads.length - 1]?.name);
+ok('аккаунт не появился', !C.store['pwa-tasks:account']);
+C.close();
 
 /* ---------- итог ---------- */
 console.log(`\n${passed} проверок пройдено, ${failed} провалено`);

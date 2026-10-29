@@ -643,6 +643,7 @@ body.sheet-open .fab { opacity: 0; transform: scale(.6); pointer-events: none; }
 .acct-email { margin: 0; font-size: 17px; font-weight: 600; }
 
 .btn-row { display: flex; gap: 10px; margin-top: 14px; }
+.btn-row[hidden] { display: none; }
 .btn-col { display: grid; gap: 10px; margin-top: 14px; }
 .btn-primary, .btn-plain, .btn-danger-plain {
   min-height: 46px;
@@ -765,7 +766,7 @@ body.sheet-open .fab { opacity: 0; transform: scale(.6); pointer-events: none; }
 .api-base > summary::-webkit-details-marker { display: none; }
 .api-base > summary::before { content: "› "; }
 .api-base[open] > summary::before { content: "⌄ "; }
-.api-base code {
+#localOnlyNote code, .api-base code {
   font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
   color: var(--label);
   word-break: break-all;

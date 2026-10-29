@@ -53,6 +53,8 @@
     acctIn: $('#acctIn'),
     acctEmail: $('#acctEmail'),
     acctSyncState: $('#acctSyncState'),
+    authButtons: $('#authButtons'),
+    localOnlyNote: $('#localOnlyNote'),
     authFields: $('#authFields'),
     authModeTitle: $('#authModeTitle'),
     authEmail: $('#authEmail'),
@@ -105,7 +107,12 @@
     } catch { return ''; }
   }
   const apiUrl = (p) => apiBase + p;
-  let serverOk = null;   // null — ещё не проверяли
+  /* Состояние API:
+     unknown     — ещё не проверяли
+     ok          — server.js отвечает
+     missing     — по этому адресу нет /api (статический хостинг: GitHub Pages, Netlify)
+     unreachable — сервер должен быть, но не отвечает (сеть/упал) */
+  let apiState = 'unknown';
 
   const storeKey = () => (account ? `pwa-tasks:v2:${account.id}` : LOCAL_STORE_KEY);
   const pullKey = () => `pwa-tasks:pull:${account ? account.id : 'local'}`;
@@ -762,18 +769,23 @@
   function renderServerState() {
     const where = apiBase || 'этот сайт';
     let text, cls;
-    if (typeof fetch !== 'function') { text = 'сервер не проверить: нужен HTTPS или localhost'; cls = 'bad'; }
-    else if (serverOk === null) { text = `проверяем сервер (${where})…`; cls = ''; }
-    else if (serverOk) { text = `сервер синхронизации отвечает (${where})`; cls = 'ok'; }
-    else if (!navigator.onLine) { text = 'нет подключения — задачи доступны локально'; cls = 'bad'; }
-    else { text = `сервер не отвечает: по адресу ${where} нет API`; cls = 'bad'; }
+    if (typeof fetch !== 'function') { text = 'Аккаунты недоступны: нужен HTTPS или localhost.'; cls = 'bad'; }
+    else if (apiState === 'unknown') { text = `Проверяем сервер (${where})…`; cls = ''; }
+    else if (apiState === 'ok') { text = `Сервер синхронизации отвечает (${where}).`; cls = 'ok'; }
+    else if (apiState === 'missing') { text = 'Локальный режим: на этом хостинге нет API, поэтому аккаунты и синхронизация недоступны. Задачи хранятся на устройстве — делайте резервную копию через «Экспорт .json».'; cls = ''; }
+    else if (!navigator.onLine) { text = 'Нет подключения — задачи доступны локально, синхронизация продолжится в сети.'; cls = 'bad'; }
+    else { text = `Сервер не отвечает (${where}). Проверьте адрес или повторите позже.`; cls = 'bad'; }
     els.serverState.textContent = text;
     els.serverState.className = 'server-state' + (cls ? ' ' + cls : '');
+    // на статическом хостинге вход не предлагается вовсе — вместо кнопок объяснение
+    const noApi = apiState === 'missing' || typeof fetch !== 'function';
+    els.authButtons.hidden = noApi;
+    els.localOnlyNote.hidden = !noApi;
   }
-  /** Пинг /api/health: по нему видно, развёрнут ли API там, откуда открыто приложение. */
+  /** Пинг /api/health: отличает «API не развёрнут» (404/HTML) от «сервер не отвечает». */
   async function probeServer() {
     renderServerState();
-    if (typeof fetch !== 'function') { serverOk = false; renderServerState(); return false; }
+    if (typeof fetch !== 'function') { apiState = 'missing'; renderServerState(); return false; }
     const ctl = typeof AbortController === 'function' ? new AbortController() : null;
     const timer = ctl ? setTimeout(() => ctl.abort(), 6000) : null;
     try {
@@ -781,15 +793,17 @@
         method: 'GET', cache: 'no-store', signal: ctl ? ctl.signal : undefined,
       });
       const data = await res.json().catch(() => null);
-      serverOk = !!(res.ok && data && data.ok);
+      if (res.ok && data && data.ok) apiState = 'ok';
+      else if (res.status === 404 || !data) apiState = 'missing';   // статика вместо API
+      else apiState = 'unreachable';
     } catch {
-      serverOk = false;
+      apiState = 'unreachable';
     } finally {
       if (timer) clearTimeout(timer);
     }
     renderServerState();
-    if (!account) setSyncUI(serverOk ? 'off' : 'error');
-    return serverOk;
+    if (!account) setSyncUI(apiState === 'unreachable' && navigator.onLine ? 'error' : 'off');
+    return apiState === 'ok';
   }
   function openAcct() {
     accountUI();
@@ -830,7 +844,7 @@
     try {
       if (raw) localStorage.setItem(API_BASE_KEY, raw); else localStorage.removeItem(API_BASE_KEY);
     } catch { /* приватный режим — значение останется до перезапуска */ }
-    serverOk = null;
+    apiState = 'unknown';
     const alive = await probeServer();
     showToast(alive ? 'Сервер отвечает' : 'Сервер не отвечает — проверьте адрес и ALLOWED_ORIGINS');
   });
@@ -859,9 +873,12 @@
   function authFailMessage(res, data, networkError) {
     if (networkError) {
       if (!navigator.onLine) return 'Нет подключения к интернету. Задачи сохранятся локально, вход выполните позже.';
-      return serverOk === false
-        ? `Сервер синхронизации не отвечает (${apiUrl('/api')}). Если сайт открыт со статического хостинга (GitHub Pages, Netlify), API там нет: запустите server.js или укажите адрес сервера в блоке «Сервер синхронизации».`
-        : `Не удалось связаться с сервером (${apiUrl('/api')}). Проверьте интернет и адрес сервера.`;
+      if (apiState === 'missing') {
+        return `Аккаунты недоступны: сайт открыт со статического хостинга, по адресу ${apiUrl('/api')} нет API. Задачи работают локально; для синхронизации нужен server.js (или укажите его адрес в блоке «Сервер синхронизации»).`;
+      }
+      return apiState === 'unreachable'
+        ? `Не удалось связаться с сервером (${apiUrl('/api')}). Проверьте интернет и адрес сервера.`
+        : 'Сервер синхронизации не отвечает. Проверьте интернет или адрес сервера.';
     }
     if (data && data.error) return data.error;
     if (res && res.status === 404) return `По адресу ${apiUrl('/api')} нет API: приложение открыто без server.js (статический хостинг).`;
@@ -914,7 +931,7 @@
     }
     save();
     locked = false;
-    serverOk = true;
+    apiState = 'ok';
     accountUI();
     render(true);
     closeAcct();
@@ -1123,6 +1140,8 @@
   if (account && pinStored()) setLocked(true);
   if (account) {
     api('/api/me').then((r) => { if (r.ok) syncNow(); }).catch(() => setSyncUI('error'));
+  } else {
+    probeServer();   // статический хостинг → сразу «локальный режим», без ошибок при входе
   }
   render();
 

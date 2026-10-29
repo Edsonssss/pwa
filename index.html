@@ -174,10 +174,14 @@
         <p class="sheet-lead">Задачи можно вести без аккаунта — они останутся только на этом устройстве.
           Аккаунт добавляет синхронизацию между вашими устройствами.</p>
         <p class="server-state" id="serverState" role="status">проверяем сервер…</p>
-        <div class="btn-row">
+        <div class="btn-row" id="authButtons">
           <button type="button" class="btn-primary" id="authLogin">Войти</button>
           <button type="button" class="btn-plain" id="authRegister">Создать аккаунт</button>
         </div>
+        <p class="sheet-note" id="localOnlyNote" hidden>Это копия приложения на статическом хостинге:
+          сервера аккаунтов здесь нет, поэтому задачи ведутся локально на устройстве.
+          Чтобы перенести их на другой телефон, используйте «Экспорт .json» → «Импорт»
+          или разверните <code>server.js</code> и укажите его адрес ниже.</p>
         <form id="authFields" hidden novalidate>
           <h2 class="sheet-sub" id="authModeTitle">Вход</h2>
           <label class="field"><span>E-mail</span>

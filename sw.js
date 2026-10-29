@@ -1,5 +1,5 @@
 /* Service Worker: офлайн-оболочка приложения. */
-const VERSION = 'v1.2.0';
+const VERSION = 'v1.3.0';
 const CACHE = `pwa-tasks-${VERSION}`;
 
 const PRECACHE = [
