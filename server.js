@@ -15,7 +15,7 @@ const crypto = require('crypto');
 const ROOT = __dirname;
 const PORT = Number(process.argv[2] || process.env.PORT || 8080);
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(ROOT, 'data'));
-const VERSION = '1.3.0';
+const VERSION = '1.4.0';
 /* Разрешённые origin для кросс-доменного API (статика на Pages/Netlify, сервер отдельно):
    ALLOWED_ORIGINS="https://user.github.io,https://app.netlify.app"  (или "*" — любой).
    Пусто = только тот же origin, с которого отдан сайт. */

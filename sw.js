@@ -1,5 +1,5 @@
 /* Service Worker: офлайн-оболочка приложения. */
-const VERSION = 'v1.3.0';
+const VERSION = 'v1.4.0';
 const CACHE = `pwa-tasks-${VERSION}`;
 
 const PRECACHE = [
@@ -18,6 +18,17 @@ const PRECACHE = [
   './icons/favicon-16.png',
   './icons/favicon-32.png',
 ];
+
+/* 'api/' относительно scope SW: для https://host/pwa/ даст https://host/pwa/api/ */
+let API_PREFIX = null;
+function apiPrefix() {
+  if (API_PREFIX === null) {
+    const scope = (self.registration && self.registration.scope) || './';
+    try { API_PREFIX = new URL('api/', new URL(scope, self.location.href)).href; }
+    catch { API_PREFIX = new URL('api/', self.location.href).href; }
+  }
+  return API_PREFIX;
+}
 
 const OFFLINE_HTML = '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Задачи — нет сети</title><body style="font:17px -apple-system,system-ui,sans-serif;display:grid;place-items:center;height:100vh;margin:0;background:#f2f2f7;color:#000"><div style="text-align:center;padding:24px"><h1 style="font-size:22px;margin:0 0 8px">Нет подключения</h1><p style="margin:0;opacity:.6">Приложение откроется, когда появится сеть или когда оболочка будет в кэше.</p></div>';
 
@@ -57,8 +68,9 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return; // чужие origin не трогаем
-  // API синхронизации всегда идёт в сеть: кэш вернул бы устаревшие задачи/токены
-  if (url.pathname.startsWith('/api/')) return;
+  // API синхронизации всегда идёт в сеть: кэш вернул бы устаревшие задачи/токены.
+  // Префикс считаем от scope, а не от корня домена — приложение может жить в подпапке.
+  if (url.href.startsWith(apiPrefix())) return;
 
   // Навигация: сеть → кэш (офлайн открываем оболочку или офлайн-страницу)
   if (req.mode === 'navigate') {

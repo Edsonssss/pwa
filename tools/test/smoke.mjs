@@ -23,6 +23,8 @@ const ok = (name, cond, extra = '') => {
 };
 const section = (t) => console.log(`\n${t}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** Путь /api/... из любого URL (приложение может быть в подпапке, адрес — внешним). */
+const routeOf = (u) => (/\/api\/[^?#]*/.exec(String(u)) || [String(u)])[0];
 
 /* ---------- окружение ---------- */
 /**
@@ -260,9 +262,8 @@ const fetchStub = async (url, opts = {}) => {
   const json = (data, status = 200) => ({
     ok: status < 400, status, json: async () => data,
   });
-  const route = new URL(String(url), 'https://local').pathname;
-  if (route === '/api/health') return json({ ok: true, name: 'pwa-tasks', version: '1.2.0' });
-  url = route;
+  url = routeOf(url);
+  if (url === '/api/health') return json({ ok: true, name: 'pwa-tasks', version: '1.3.0' });
   if (url === '/api/login' || url === '/api/register') {
     return json({ token: 'tok-123', user: { id: 'u1', email: 'anna@example.com' } });
   }
@@ -351,7 +352,7 @@ ok('в тосте подтверждён вход', /Вход выполнен/.
 apiCalls.length = 0;
 await B.w.__pwa.syncNow();
 await sleep(40);
-const push = apiCalls.find((c) => c.url === '/api/tasks' && c.method === 'POST');
+const push = apiCalls.find((c) => routeOf(c.url) === '/api/tasks' && c.method === 'POST');
 ok('push идёт с Bearer-токеном', push?.headers?.Authorization === 'Bearer tok-123', JSON.stringify(push?.headers));
 ok('push отправляет задачи аккаунта', !!push && JSON.parse(push.body).tasks.length >= localBefore);
 ok('после синхронизации подтянута задача с сервера',
@@ -413,9 +414,10 @@ ok('чип аккаунта вернулся в анонимное состоя�
    ЧАСТЬ 3: статический хостинг (GitHub Pages) — API нет вовсе
    ======================================================================= */
 section('\nСтатический хостинг: локальный режим');
+const staticCalls = [];
 const staticFetch = async (url) => {
-  const route = new URL(String(url), 'https://local').pathname;
-  if (route.startsWith('/api/')) {
+  staticCalls.push(String(url));
+  if (routeOf(url).startsWith('/api/')) {
     return { ok: false, status: 404, json: async () => { throw new Error('not json'); }, text: async () => '<html>404</html>' };
   }
   throw new TypeError('статика в тесте не отдаётся');
@@ -425,6 +427,8 @@ await sleep(200);
 const c$ = C.$;
 ok('нет ошибок при загрузке на статике', C.problems.length === 0, C.problems.join(' | '));
 ok('зонд понял, что API нет (404/HTML)', /Локальный режим/.test(c$('#serverState').textContent), c$('#serverState').textContent);
+ok('health запрошен в подпапке сайта, а не в корне домена',
+  staticCalls.some((u) => u === 'https://user.github.io/pwa/api/health'), staticCalls.join(' | '));
 ok('задачи работают без сервера', C.$$('#list .row').length === 3);
 C.click(c$('#acctBtn'));
 await sleep(150);

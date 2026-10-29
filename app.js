@@ -106,7 +106,9 @@
       return /^https?:\/\//i.test(v) ? v : '';
     } catch { return ''; }
   }
-  const apiUrl = (p) => apiBase + p;
+  /* p — путь вида '/api/health'. С внешним адресом — как есть; без него —
+     относительно базы приложения, чтобы работало и в подпапке (/pwa/api/…). */
+  const apiUrl = (p) => (apiBase ? apiBase + p : new URL('.' + p, document.baseURI).href);
   /* Состояние API:
      unknown     — ещё не проверяли
      ok          — server.js отвечает
