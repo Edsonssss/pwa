@@ -18,7 +18,7 @@
   --green: #34c759;
   --check-border: #76767c;
   --placeholder: #6e6e73; /* плейсхолдеры = secondary, 4.5+:1 */
-  --thumb-dark: #74747a;  / 4.64:1 белый текст, 3.08:1 к треку
+  --thumb-dark: #74747a;  /* 4.64:1 белый текст, 3.08:1 к треку */
   --toast-action: #8ec5ff;/* синяя ссылка на тёмном тосте >= 4.5:1 */
   --shadow: 0 6px 24px rgba(0, 0, 0, .14);
   --spring: cubic-bezier(.32, .72, 0, 1);
@@ -48,7 +48,7 @@
     --green: #30d158;
     --check-border: #63636a;
     --placeholder: #a1a1a6;
-    --thumb-dark: #74747a;  / 4.64:1 белый текст, 3.08:1 к треку
+    --thumb-dark: #74747a;  /* 4.64:1 белый текст, 3.08:1 к треку */
     --toast-action: #8ec5ff;
     --shadow: 0 6px 24px rgba(0, 0, 0, .5);
     color-scheme: dark;
