@@ -1,8 +1,12 @@
-/* Задачи — PWA. Логика без зависимостей. */
+/* Задачи — PWA. Логика без зависимостей.
+   Режимы: локальный (без аккаунта, офлайн) и аккаунт с синхронизацией через /api.
+   Синхронизация: last-write-wins по updatedAt, удаления — надгробиями (deleted). */
 (() => {
   'use strict';
 
-  const STORE_KEY = 'pwa-tasks:v1';
+  const LOCAL_STORE_KEY = 'pwa-tasks:v1';
+  const ACCOUNT_KEY = 'pwa-tasks:account';
+  const TOMBSTONE_TTL_MS = 30 * 24 * 3600 * 1000;
   const $ = (s) => document.querySelector(s);
 
   const els = {
@@ -32,13 +36,62 @@
     storageBanner: $('#storageBanner'),
     storageBannerClose: $('#storageBannerClose'),
     exportBtn: $('#exportBtn'),
+    shareBtn: $('#shareBtn'),
     importBtn: $('#importBtn'),
     importFile: $('#importFile'),
     toast: $('#toast'),
     toastText: $('#toastText'),
     toastAction: $('#toastAction'),
     liveStatus: $('#liveStatus'),
+    acctBtn: $('#acctBtn'),
+    acctInitials: $('#acctInitials'),
+    acctDot: $('#acctDot'),
+    acctSheet: $('#acctSheet'),
+    acctClose: $('#acctClose'),
+    acctAnon: $('#acctAnon'),
+    acctIn: $('#acctIn'),
+    acctEmail: $('#acctEmail'),
+    acctSyncState: $('#acctSyncState'),
+    authFields: $('#authFields'),
+    authModeTitle: $('#authModeTitle'),
+    authEmail: $('#authEmail'),
+    authPassword: $('#authPassword'),
+    authMigrate: $('#authMigrate'),
+    authError: $('#authError'),
+    authSubmit: $('#authSubmit'),
+    authCancel: $('#authCancel'),
+    syncNowBtn: $('#syncNowBtn'),
+    pinSetBtn: $('#pinSetBtn'),
+    lockBtn: $('#lockBtn'),
+    logoutBtn: $('#logoutBtn'),
+    pinSheet: $('#pinSheet'),
+    pinClose: $('#pinClose'),
+    pinTitle: $('#pinTitle'),
+    pinInput: $('#pinInput'),
+    pinRepeat: $('#pinRepeat'),
+    pinRepeatRow: $('#pinRepeatRow'),
+    pinError: $('#pinError'),
+    pinSubmit: $('#pinSubmit'),
+    lockOverlay: $('#lockOverlay'),
+    lockPin: $('#lockPin'),
+    lockError: $('#lockError'),
+    lockSubmit: $('#lockSubmit'),
   };
+
+  /* ---------------- аккаунт и хранилище ---------------- */
+  let account = loadAccount();      // {id, email, token} | null
+  let locked = false;               // локальная блокировка PIN-ом (в рамках сессии)
+  let authMode = 'login';           // 'login' | 'register'
+
+  function loadAccount() {
+    try {
+      const a = JSON.parse(localStorage.getItem(ACCOUNT_KEY) || 'null');
+      if (a && a.id && a.token && a.email) return a;
+    } catch { /* ignore */ }
+    return null;
+  }
+  const storeKey = () => (account ? `pwa-tasks:v2:${account.id}` : LOCAL_STORE_KEY);
+  const pullKey = () => `pwa-tasks:pull:${account ? account.id : 'local'}`;
 
   /** @type {{tasks: Array<object>, filter: string, query: string}} */
   const state = { tasks: load(), filter: 'all', query: '' };
@@ -47,33 +100,36 @@
   let deferredPrompt = null;
   let lastViewKey = null;
   let swReg = null;
+  let syncState = 'idle';   // idle | syncing | ok | error | off
+  let syncing = false;
+  let syncTimer = null;
 
-  /* ---------------- хранилище ---------------- */
-  function load() {
-    try {
-      const raw = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
-      if (Array.isArray(raw?.tasks)) return raw.tasks.map(normalizeTask).filter(Boolean);
-    } catch { /* повреждённые данные — начинаем заново */ }
-    return seed();
-  }
   function normalizeTask(t) {
     if (!t || typeof t !== 'object' || typeof t.title !== 'string' || !t.title.trim()) return null;
     return {
-      id: typeof t.id === 'string' ? t.id : uid(),
+      id: typeof t.id === 'string' ? t.id.slice(0, 64) : uid(),
       title: t.title.slice(0, 140),
       note: typeof t.note === 'string' ? t.note.slice(0, 500) : '',
       due: typeof t.due === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(t.due) ? t.due : '',
       prio: [0, 1, 2].includes(t.prio) ? t.prio : 0,
       done: !!t.done,
+      deleted: !!t.deleted,
       createdAt: Number(t.createdAt) || Date.now(),
       completedAt: Number(t.completedAt) || null,
+      updatedAt: Number(t.updatedAt) || Date.now(),
     };
   }
-  /** Сохранение с обработкой переполнения/недоступности хранилища.
-      Возвращает false, если записать не удалось (UI тогда не мутируем). */
+  function load() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(storeKey()) || 'null');
+      if (Array.isArray(raw?.tasks)) return raw.tasks.map(normalizeTask).filter(Boolean);
+    } catch { /* повреждённые данные — начинаем заново */ }
+    return account ? [] : seed();
+  }
+  /** Сохранение с обработкой переполнения/недоступности хранилища. */
   function save() {
     try {
-      localStorage.setItem(STORE_KEY, JSON.stringify({ v: 2, tasks: state.tasks }));
+      localStorage.setItem(storeKey(), JSON.stringify({ v: 2, tasks: state.tasks }));
       return true;
     } catch (e) {
       showToast('Не удалось сохранить: хранилище недоступно');
@@ -82,15 +138,17 @@
   }
   function seed() {
     const t = todayStr();
+    const now = Date.now();
     return [
-      { id: uid(), title: 'Установить приложение на экран «Домой»', note: 'Safari → Поделиться → На экран «Домой»', due: t, prio: 1, done: false, createdAt: Date.now() - 3e5, completedAt: null },
-      { id: uid(), title: 'Отключить Wi-Fi и проверить офлайн', note: 'Все задачи и экраны работают без сети', due: '', prio: 0, done: false, createdAt: Date.now() - 2e5, completedAt: null },
-      { id: uid(), title: 'Смакнуть список вниз — заголовок схлопнется', note: '', due: '', prio: 0, done: true, createdAt: Date.now() - 1e5, completedAt: Date.now() - 6e4 },
+      { id: uid(), title: 'Установить приложение на экран «Домой»', note: 'Safari → Поделиться → На экран «Домой»', due: t, prio: 1, done: false, deleted: false, createdAt: now - 3e5, completedAt: null, updatedAt: now - 3e5 },
+      { id: uid(), title: 'Отключить Wi-Fi и проверить офлайн', note: 'Все задачи и экраны работают без сети', due: '', prio: 0, done: false, deleted: false, createdAt: now - 2e5, completedAt: null, updatedAt: now - 2e5 },
+      { id: uid(), title: 'Смакнуть список вниз — заголовок схлопнется', note: '', due: '', prio: 0, done: true, deleted: false, createdAt: now - 1e5, completedAt: now - 6e4, updatedAt: now - 1e5 },
     ];
   }
   function uid() {
     return crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random());
   }
+  const touch = (t) => { t.updatedAt = Date.now(); return t; };
 
   /* ---------------- даты ---------------- */
   function todayStr(d = new Date()) {
@@ -101,7 +159,6 @@
     d.setDate(d.getDate() + n);
     return todayStr(d);
   }
-  // Форматтеры Intl создаются один раз (ранее — новый на каждую строку каждый рендер)
   const fmtShort = new Intl.DateTimeFormat('ru', { day: 'numeric', month: 'short' });
   const fmtFull = new Intl.DateTimeFormat('ru', { day: 'numeric', month: 'short', year: 'numeric' });
 
@@ -125,6 +182,7 @@
   function visibleTasks(today) {
     const q = state.query.trim().toLowerCase();
     let list = state.tasks.filter((t) => {
+      if (t.deleted) return false;
       if (state.filter === 'done' && !t.done) return false;
       if (state.filter === 'today' && t.due !== today) return false;
       if (q && !(t.title + ' ' + (t.note || '')).toLowerCase().includes(q)) return false;
@@ -173,7 +231,6 @@
   }
 
   function render(announce = false) {
-    // Возврат фокуса: пересборка innerHTML раньше сбрасывала его на <body>
     let restoreSel = null;
     const active = document.activeElement;
     if (active && active.closest && active.closest('#list')) {
@@ -201,7 +258,7 @@
         : state.filter === 'today' ? 'На сегодня задач нет'
         : 'Пока пусто — нажмите «+»';
     }
-    const activeCount = state.tasks.filter((t) => !t.done).length;
+    const activeCount = state.tasks.filter((t) => !t.done && !t.deleted).length;
     document.title = activeCount ? `Задачи (${activeCount})` : 'Задачи';
 
     const viewKey = `${state.filter}|${state.query}`;
@@ -224,28 +281,43 @@
   function toggle(id) {
     const t = state.tasks.find((x) => x.id === id);
     if (!t) return;
-    const was = t.done, wasAt = t.completedAt;
+    const was = t.done, wasAt = t.completedAt, wasUpd = t.updatedAt;
     t.done = !was;
     t.completedAt = t.done ? Date.now() : null;
-    if (!save()) { t.done = was; t.completedAt = wasAt; return; }
+    touch(t);
+    if (!save()) { t.done = was; t.completedAt = wasAt; t.updatedAt = wasUpd; return; }
     render();
+    scheduleSync();
   }
   function remove(id) {
-    const idx = state.tasks.findIndex((x) => x.id === id);
-    if (idx < 0) return;
-    const [task] = state.tasks.splice(idx, 1);
-    if (!save()) { state.tasks.splice(idx, 0, task); return; }
-    lastDeleted = { task, idx };
+    const t = state.tasks.find((x) => x.id === id);
+    if (!t || t.deleted) return;
+    const wasUpd = t.updatedAt;
+    t.deleted = true;
+    touch(t);
+    if (!save()) { t.deleted = false; t.updatedAt = wasUpd; return; }
+    lastDeleted = { id: t.id };
     render();
     showToast('Задача удалена', 'Вернуть', restore);
+    scheduleSync();
   }
   function restore() {
     if (!lastDeleted) return;
-    state.tasks.splice(Math.min(lastDeleted.idx, state.tasks.length), 0, lastDeleted.task);
+    const t = state.tasks.find((x) => x.id === lastDeleted.id);
     lastDeleted = null;
+    if (!t) return;
+    t.deleted = false;
+    touch(t);
     if (!save()) return;
     render();
     hideToast();
+    scheduleSync();
+  }
+  function purgeOldTombstones() {
+    const cut = Date.now() - TOMBSTONE_TTL_MS;
+    const before = state.tasks.length;
+    state.tasks = state.tasks.filter((t) => !(t.deleted && t.updatedAt < cut));
+    return state.tasks.length !== before;
   }
 
   /* ---------------- swipe-to-delete ---------------- */
@@ -292,7 +364,6 @@
     else if (act === 'delete') remove(row.dataset.id);
     else if (act === 'edit') openSheet(row.dataset.id);
   });
-  // Клавиатура: switch-галочка активируется Enter/Space
   els.list.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' && e.key !== ' ') return;
     const t = e.target.closest('[data-act="toggle"]');
@@ -316,7 +387,6 @@
     render(true);
   });
 
-  // Дебаунс поиска: ранее список пересобирался на каждый символ
   let searchTimer = null;
   els.search.addEventListener('input', () => {
     clearTimeout(searchTimer);
@@ -414,7 +484,6 @@
   els.sheetCancel.addEventListener('click', requestClose);
   els.backdrop.addEventListener('click', requestClose);
 
-  // Ловушка фокуса внутри диалога
   els.sheet.addEventListener('keydown', (e) => {
     if (e.key !== 'Tab') return;
     const focusables = [...els.sheet.querySelectorAll('button, input, textarea, [tabindex="0"]')]
@@ -425,7 +494,10 @@
     else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !els.sheet.hidden) requestClose();
+    if (e.key !== 'Escape') return;
+    if (!els.pinSheet.hidden) { closePin(); return; }
+    if (!els.acctSheet.hidden) { closeAcct(); return; }
+    if (!els.sheet.hidden) requestClose();
   });
 
   els.sheet.addEventListener('submit', (e) => {
@@ -437,19 +509,20 @@
       const t = state.tasks.find((x) => x.id === editingId);
       const backup = { ...t };
       Object.assign(t, data);
+      touch(t);
       if (!save()) { Object.assign(t, backup); return; }
     } else {
-      state.tasks.push({ id: uid(), ...data, done: false, createdAt: Date.now(), completedAt: null });
+      state.tasks.push(touch({ id: uid(), ...data, done: false, deleted: false, createdAt: Date.now(), completedAt: null }));
       if (!save()) { state.tasks.pop(); return; }
     }
     render(true); closeSheet();
+    scheduleSync();
   });
 
   els.sheetDelete.addEventListener('click', () => {
     if (editingId) { remove(editingId); closeSheet(); }
   });
 
-  // свайп вниз за «ручку», как в iOS
   (() => {
     let y0 = null;
     const grip = $('#sheetGrip');
@@ -470,7 +543,6 @@
     });
   })();
 
-  // клавиатура не должна перекрывать шторку
   if (window.visualViewport) {
     visualViewport.addEventListener('resize', () => {
       if (els.sheet.hidden) return;
@@ -515,28 +587,46 @@
   }, { passive: true });
 
   /* ---------------- офлайн-индикатор ---------------- */
-  const setOnline = () => { els.offlinePill.hidden = navigator.onLine; };
+  const setOnline = () => {
+    els.offlinePill.hidden = navigator.onLine;
+    if (navigator.onLine) scheduleSync();
+  };
   addEventListener('online', setOnline);
-  addEventListener('offline', setOnline);
+  addEventListener('offline', () => { els.offlinePill.hidden = false; setSyncUI(syncState); });
   setOnline();
 
-  /* ---------------- экспорт / импорт (страховка от изоляции хранилища iOS) ---------------- */
-  function exportData() {
-    const payload = JSON.stringify({ app: 'pwa-tasks', v: 2, exportedAt: new Date().toISOString(), tasks: state.tasks }, null, 2);
-    const blob = new Blob([payload], { type: 'application/json' });
-    const file = new File([blob], 'pwa-tasks.json', { type: 'application/json' });
-    if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      navigator.share({ files: [file], title: 'Задачи' }).catch(() => {});
-      return;
-    }
+  /* ---------------- экспорт / импорт ---------------- */
+  function exportPayload() {
+    return JSON.stringify({
+      app: 'pwa-tasks',
+      v: 2,
+      exportedAt: new Date().toISOString(),
+      account: account ? account.email : null,
+      tasks: state.tasks.filter((t) => !t.deleted).map((t) => ({ ...t })),
+    }, null, 2);
+  }
+  function exportFile() {
+    const blob = new Blob([exportPayload()], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = 'pwa-tasks.json';
-    document.body.appendChild(a); a.click(); a.remove();
+    a.href = url;
+    a.download = `pwa-tasks-${todayStr()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 4000);
-    showToast('Резервная копия сохранена');
+    showToast('Файл .json сохранён в загрузки');
   }
-  els.exportBtn.addEventListener('click', exportData);
+  async function exportShare() {
+    const blob = new Blob([exportPayload()], { type: 'application/json' });
+    const file = new File([blob], `pwa-tasks-${todayStr()}.json`, { type: 'application/json' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: 'Задачи' }); return; } catch { /* отменено */ return; }
+    }
+    exportFile();
+  }
+  els.exportBtn.addEventListener('click', exportFile);
+  els.shareBtn.addEventListener('click', exportShare);
   els.importBtn.addEventListener('click', () => els.importFile.click());
   els.importFile.addEventListener('change', async () => {
     const f = els.importFile.files[0];
@@ -546,15 +636,287 @@
       const data = JSON.parse(await f.text());
       const raw = Array.isArray(data) ? data : data?.tasks;
       if (!Array.isArray(raw)) throw new Error('bad shape');
-      const tasks = raw.map(normalizeTask).filter(Boolean);
+      const incoming = raw.map(normalizeTask).filter(Boolean);
       const backup = state.tasks;
-      state.tasks = tasks;
+      state.tasks = mergeTasks(state.tasks, incoming);
       if (!save()) { state.tasks = backup; return; }
       render(true);
-      showToast(`Импортировано задач: ${tasks.length}`);
+      showToast(`Импортировано задач: ${incoming.length}`);
+      scheduleSync();
     } catch {
       showToast('Не удалось прочитать файл импорта');
     }
+  });
+
+  /* ---------------- синхронизация ---------------- */
+  function setSyncUI(next) {
+    syncState = next;
+    const map = {
+      off: ['нет аккаунта', ''],
+      idle: ['синхронизировано', 'ok'],
+      syncing: ['синхронизация…', 'syncing'],
+      ok: ['синхронизировано', 'ok'],
+      error: ['ошибка синхронизации', 'error'],
+    };
+    const [text, cls] = map[next] || map.idle;
+    els.acctDot.className = 'sync-dot' + (cls ? ' ' + cls : '');
+    els.acctSyncState.textContent = navigator.onLine ? text : 'офлайн: изменения в очереди';
+  }
+  function scheduleSync() {
+    if (!account || locked) { setSyncUI(account ? syncState : 'off'); return; }
+    if (!navigator.onLine) { setSyncUI('error'); return; }
+    clearTimeout(syncTimer);
+    syncTimer = setTimeout(syncNow, 1500);
+  }
+  /** Слияние LWW по updatedAt; используется и для импорта, и для пулла с сервера. */
+  function mergeTasks(local, remote) {
+    const byId = new Map(local.map((t) => [t.id, t]));
+    for (const r of remote) {
+      const cur = byId.get(r.id);
+      if (!cur || r.updatedAt > cur.updatedAt) byId.set(r.id, r);
+    }
+    return [...byId.values()];
+  }
+  async function api(path, opts = {}) {
+    const res = await fetch(path, {
+      ...opts,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(account ? { Authorization: `Bearer ${account.token}` } : {}),
+        ...(opts.headers || {}),
+      },
+    });
+    if (res.status === 401 && account) {
+      dropAccount();
+      showToast('Сессия истекла — войдите снова');
+      throw new Error('unauthorized');
+    }
+    return res;
+  }
+  async function syncNow() {
+    if (!account || syncing || locked || !navigator.onLine || typeof fetch !== 'function') return;
+    syncing = true;
+    setSyncUI('syncing');
+    try {
+      const since = Number(localStorage.getItem(pullKey()) || 0);
+      const res = await api('/api/tasks', {
+        method: 'POST',
+        body: JSON.stringify({ since, tasks: state.tasks }),
+      });
+      if (!res.ok) throw new Error('http ' + res.status);
+      const data = await res.json();
+      const remote = (data.tasks || []).map(normalizeTask).filter(Boolean);
+      const purged = purgeOldTombstones();
+      state.tasks = mergeTasks(state.tasks, remote);
+      localStorage.setItem(pullKey(), String(data.serverNow || Date.now()));
+      if (!save()) throw new Error('storage');
+      render();
+      setSyncUI('ok');
+      if (purged) save();
+    } catch (e) {
+      if (e?.message !== 'unauthorized') setSyncUI('error');
+    } finally {
+      syncing = false;
+    }
+  }
+
+  /* ---------------- аккаунт: вход/регистрация/выход ---------------- */
+  function accountUI() {
+    if (account) {
+      els.acctInitials.textContent = account.email.slice(0, 2).toUpperCase();
+      els.acctBtn.setAttribute('aria-label', `Аккаунт ${account.email}`);
+      els.acctAnon.hidden = true;
+      els.acctIn.hidden = false;
+      els.acctEmail.textContent = account.email;
+    } else {
+      els.acctInitials.textContent = '•';
+      els.acctBtn.setAttribute('aria-label', 'Войти или создать аккаунт');
+      els.acctAnon.hidden = false;
+      els.acctIn.hidden = true;
+      setSyncUI('off');
+    }
+  }
+  function openAcct() {
+    accountUI();
+    els.authFields.hidden = true;
+    els.authError.hidden = true;
+    els.acctSheet.hidden = false;
+    els.backdrop.hidden = false;
+    lockScroll();
+    requestAnimationFrame(() => {
+      els.acctSheet.classList.add('show');
+      els.backdrop.classList.add('show');
+    });
+    setTimeout(() => (account ? els.syncNowBtn : $('#authLogin')).focus({ preventScroll: true }), 120);
+  }
+  function closeAcct() {
+    els.acctSheet.classList.remove('show');
+    els.backdrop.classList.remove('show');
+    setTimeout(() => {
+      els.acctSheet.hidden = true;
+      els.backdrop.hidden = true;
+      unlockScroll();
+    }, 420);
+  }
+  els.acctBtn.addEventListener('click', openAcct);
+  els.acctClose.addEventListener('click', closeAcct);
+
+  function setAuthMode(mode) {
+    authMode = mode;
+    els.authModeTitle.textContent = mode === 'login' ? 'Вход' : 'Регистрация';
+    els.authSubmit.textContent = mode === 'login' ? 'Войти' : 'Создать аккаунт';
+    els.authFields.hidden = false;
+    els.authError.hidden = true;
+    setTimeout(() => els.authEmail.focus({ preventScroll: true }), 120);
+  }
+  $('#authLogin').addEventListener('click', () => setAuthMode('login'));
+  $('#authRegister').addEventListener('click', () => setAuthMode('register'));
+  els.authCancel.addEventListener('click', () => { els.authFields.hidden = true; els.authError.hidden = true; });
+
+  function dropAccount() {
+    account = null;
+    try { localStorage.removeItem(ACCOUNT_KEY); } catch { /* ignore */ }
+  }
+  async function submitAuth(e) {
+    e.preventDefault();
+    const email = els.authEmail.value.trim();
+    const password = els.authPassword.value;
+    els.authError.hidden = true;
+    if (typeof fetch !== 'function') {
+      els.authError.textContent = 'Синхронизация доступна только по HTTPS или localhost';
+      els.authError.hidden = false;
+      return;
+    }
+    // локальные задачи ДО переключения хранилища — для переноса
+    const localBefore = account ? [] : state.tasks.slice();
+    try {
+      const res = await fetch(`/api/${authMode === 'login' ? 'login' : 'register'}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        els.authError.textContent = data.error || 'Не удалось выполнить вход';
+        els.authError.hidden = false;
+        return;
+      }
+      account = { id: data.user.id, email: data.user.email, token: data.token };
+      localStorage.setItem(ACCOUNT_KEY, JSON.stringify(account));
+      state.tasks = load();
+      if (els.authMigrate.checked && localBefore.length) {
+        state.tasks = mergeTasks(state.tasks, localBefore.map((t) => ({ ...t })));
+      }
+      save();
+      locked = false;
+      accountUI();
+      render(true);
+      closeAcct();
+      showToast(`Вход выполнен: ${account.email}`);
+      syncNow();
+    } catch {
+      els.authError.textContent = 'Сервер недоступен. Проверьте сеть или где развёрнут API.';
+      els.authError.hidden = false;
+    }
+  }
+  els.authFields.addEventListener('submit', submitAuth);
+
+  els.logoutBtn.addEventListener('click', async () => {
+    try { await api('/api/logout', { method: 'POST' }); } catch { /* best effort */ }
+    dropAccount();
+    state.tasks = load();
+    save();
+    accountUI();
+    render(true);
+    closeAcct();
+    showToast('Вы вышли: задачи остались на этом устройстве');
+  });
+  els.syncNowBtn.addEventListener('click', () => syncNow());
+
+  /* ---------------- PIN-блокировка (локальная, на устройство) ---------------- */
+  const pinKey = () => `pwa-tasks:pin:${account ? account.id : 'local'}`;
+  const pinAvailable = () => !!(window.crypto && crypto.subtle);
+  const pinStored = () => {
+    try { return JSON.parse(localStorage.getItem(pinKey()) || 'null'); } catch { return null; }
+  };
+  async function derivePin(pin, salt) {
+    const enc = new TextEncoder();
+    const key = await crypto.subtle.importKey('raw', enc.encode(pin), 'PBKDF2', false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits(
+      { name: 'PBKDF2', salt: enc.encode(salt), iterations: 120000, hash: 'SHA-256' }, key, 256);
+    return [...new Uint8Array(bits)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  function pinUI() {
+    els.pinSetBtn.hidden = !pinAvailable();
+    els.lockBtn.hidden = !pinAvailable() || !pinStored();
+  }
+  let pinMode = 'set';
+  function openPin(mode) {
+    pinMode = mode;
+    els.pinTitle.textContent = mode === 'set' ? 'Установить PIN' : 'Сменить PIN';
+    els.pinRepeatRow.hidden = mode !== 'set';
+    els.pinInput.value = '';
+    els.pinRepeat.value = '';
+    els.pinError.hidden = true;
+    els.pinSheet.hidden = false;
+    els.backdrop.hidden = false;
+    lockScroll();
+    els.backdrop.classList.add('show');
+    els.pinSheet.classList.add('show');
+    setTimeout(() => els.pinInput.focus({ preventScroll: true }), 120);
+  }
+  function closePin() {
+    els.pinSheet.classList.remove('show');
+    els.backdrop.classList.remove('show');
+    setTimeout(() => { els.pinSheet.hidden = true; els.backdrop.hidden = true; unlockScroll(); }, 420);
+  }
+  els.pinSetBtn.addEventListener('click', () => openPin('set'));
+  els.pinClose.addEventListener('click', closePin);
+  els.pinSheet.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const pin = els.pinInput.value.trim();
+    if (!/^\d{4,8}$/.test(pin)) {
+      els.pinError.textContent = 'PIN — от 4 до 8 цифр';
+      els.pinError.hidden = false;
+      return;
+    }
+    if (pinMode === 'set' && pin !== els.pinRepeat.value.trim()) {
+      els.pinError.textContent = 'PIN не совпадает';
+      els.pinError.hidden = false;
+      return;
+    }
+    const salt = crypto.getRandomValues(new Uint8Array(16)).join('');
+    const hash = await derivePin(pin, salt);
+    localStorage.setItem(pinKey(), JSON.stringify({ salt, hash }));
+    closePin();
+    pinUI();
+    showToast('PIN установлен на этом устройстве');
+  });
+  els.lockBtn.addEventListener('click', () => {
+    closeAcct();
+    setLocked(true);
+  });
+  function setLocked(v) {
+    locked = v;
+    els.lockOverlay.hidden = !v;
+    if (v) {
+      els.lockPin.value = '';
+      els.lockError.hidden = true;
+      setTimeout(() => els.lockPin.focus({ preventScroll: true }), 60);
+    }
+  }
+  els.lockOverlay.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const rec = pinStored();
+    const hash = await derivePin(els.lockPin.value.trim(), rec.salt);
+    if (hash !== rec.hash) {
+      els.lockError.textContent = 'Неверный PIN';
+      els.lockError.hidden = false;
+      els.lockPin.value = '';
+      return;
+    }
+    setLocked(false);
+    scheduleSync();
   });
 
   /* ---------------- установка PWA ---------------- */
@@ -590,8 +952,8 @@
     els.installCard.hidden = true;
   });
 
-  // Предупреждение: данные установленного PWA изолированы от Safari (iOS)
-  if (standalone && !localStorage.getItem('pwa-tasks:isolation-shown')) {
+  // Предупреждение об изоляции хранилища — только в локальном режиме без аккаунта
+  if (standalone && !account && !localStorage.getItem('pwa-tasks:isolation-shown')) {
     els.storageBanner.hidden = false;
   }
   els.storageBannerClose.addEventListener('click', () => {
@@ -601,7 +963,6 @@
 
   /* ---------------- service worker ---------------- */
   if ('serviceWorker' in navigator) {
-    // updateViaCache:'none' — HTTP-кэш хостинга не должен держать старый sw.js
     navigator.serviceWorker.register('sw.js', { scope: './', updateViaCache: 'none' }).then((reg) => {
       swReg = reg;
       const ready = () => {
@@ -618,7 +979,6 @@
         if (!installing) return;
         installing.addEventListener('statechange', () => {
           if (installing.state === 'activated') ready();
-          // Новый SW встал в очередь: предлагаем обновить, а не ломаем сессию skipWaiting
           if (installing.state === 'installed' && navigator.serviceWorker.controller) {
             showToast('Доступна новая версия', 'Обновить', () => {
               reg.waiting?.postMessage('SKIP_WAITING');
@@ -630,9 +990,11 @@
       });
     }).catch(() => { /* например, file:// — молча пропускаем */ });
 
-    // Установленное приложение может жить днями без navigation: проверяем обновления сами
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible' && swReg) swReg.update().catch(() => {});
+      if (document.visibilityState === 'visible') {
+        if (swReg) swReg.update().catch(() => {});
+        syncNow();
+      }
     });
   }
 
@@ -642,18 +1004,28 @@
     setTimeout(() => openSheet(), 300);
   }
 
-  // делегируем bindSwipe для новых строк
   const mo = new MutationObserver(() => {
     els.list.querySelectorAll('.row:not([data-swipe])').forEach((r) => { r.dataset.swipe = '1'; bindSwipe(r); });
   });
   mo.observe(els.list, { childList: true });
 
-  // Смена суток: метки «Сегодня/Вчера» должны оставаться верными
   let lastDay = todayStr();
   setInterval(() => {
     const now = todayStr();
     if (now !== lastDay) { lastDay = now; render(); }
   }, 60000);
 
+  /* ---------------- старт ---------------- */
+  accountUI();
+  pinUI();
+  if (account && pinStored()) setLocked(true);
+  if (account) {
+    api('/api/me').then((r) => { if (r.ok) syncNow(); }).catch(() => setSyncUI('error'));
+  }
   render();
+
+  // отладочный хук для тестов: ?debug=1
+  if (new URLSearchParams(location.search).has('debug')) {
+    window.__pwa = { mergeTasks, syncNow, scheduleSync, get account() { return account; }, state, normalizeTask, exportPayload };
+  }
 })();

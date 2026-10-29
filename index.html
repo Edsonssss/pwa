@@ -43,6 +43,11 @@
     <div class="title-row">
       <h1 class="large-title">Задачи</h1>
       <span class="offline-pill" id="offlinePill" hidden>офлайн</span>
+      <button class="acct" id="acctBtn" type="button" aria-haspopup="dialog"
+              aria-label="Аккаунт и синхронизация">
+        <span class="acct-initials" id="acctInitials" aria-hidden="true">•</span>
+        <span class="sync-dot" id="acctDot" aria-hidden="true"></span>
+      </button>
     </div>
 
     <div class="search-wrap">
@@ -82,16 +87,20 @@
     <div class="banner" id="storageBanner" role="note" hidden>
       <span id="storageBannerText">
         Задачи хранятся только внутри этого приложения: iOS не переносит данные из Safari
-        при установке ярлыка. Делайте резервную копию через «Экспорт».
+        при установке ярлыка. Создайте аккаунт для синхронизации между устройствами
+        или сделайте резервную копию через «Экспорт .json».
       </span>
       <button class="banner-close" id="storageBannerClose" aria-label="Скрыть предупреждение">×</button>
     </div>
 
     <div class="data-row">
-      <button class="data-btn" id="exportBtn">Экспорт</button>
+      <button class="data-btn" id="exportBtn">Экспорт .json</button>
+      <button class="data-btn" id="shareBtn">Поделиться</button>
       <button class="data-btn" id="importBtn">Импорт</button>
       <input type="file" id="importFile" accept=".json,application/json" hidden>
     </div>
+    <p class="data-hint">«Экспорт .json» сразу сохраняет файл в загрузки; «Поделиться» отдаёт его
+      в любое приложение (AirDrop, Почта, «Файлы», Telegram). Импорт объединяет задачи, ничего не затирая.</p>
   </main>
 
   <!-- Кнопка «+» -->
@@ -149,6 +158,96 @@
       </div>
 
       <button type="button" class="destructive" id="sheetDelete" hidden>Удалить задачу</button>
+    </div>
+  </form>
+
+  <!-- Аккаунт / синхронизация -->
+  <div class="sheet sheet-plain" id="acctSheet" role="dialog" aria-modal="true" aria-labelledby="acctSheetTitle" hidden>
+    <div class="sheet-grip" aria-hidden="true"></div>
+    <div class="sheet-head">
+      <span class="sheet-title" id="acctSheetTitle">Аккаунт</span>
+      <button type="button" class="sheet-cancel" id="acctClose">Закрыть</button>
+    </div>
+
+    <div class="sheet-body">
+      <section id="acctAnon">
+        <p class="sheet-lead">Задачи можно вести без аккаунта — они останутся только на этом устройстве.
+          Аккаунт добавляет синхронизацию между вашими устройствами.</p>
+        <div class="btn-row">
+          <button type="button" class="btn-primary" id="authLogin">Войти</button>
+          <button type="button" class="btn-plain" id="authRegister">Создать аккаунт</button>
+        </div>
+        <form id="authFields" hidden novalidate>
+          <h2 class="sheet-sub" id="authModeTitle">Вход</h2>
+          <label class="field"><span>E-mail</span>
+            <input id="authEmail" type="email" autocomplete="username" autocapitalize="none"
+                   inputmode="email" required>
+          </label>
+          <label class="field"><span>Пароль</span>
+            <input id="authPassword" type="password" autocomplete="current-password" minlength="8" required>
+          </label>
+          <label class="switch-row">
+            <input id="authMigrate" type="checkbox" checked>
+            <span>Перенести задачи с этого устройства в аккаунт</span>
+          </label>
+          <p class="form-error" id="authError" role="alert" hidden></p>
+          <div class="btn-row">
+            <button type="submit" class="btn-primary" id="authSubmit">Войти</button>
+            <button type="button" class="btn-plain" id="authCancel">Отмена</button>
+          </div>
+          <p class="sheet-note">Пароль хранится на сервере в виде scrypt-хэша. Данные аккаунта — ваши личные:
+            другой пользователь их не видит.</p>
+        </form>
+      </section>
+
+      <section id="acctIn" hidden>
+        <p class="acct-email" id="acctEmail"></p>
+        <p class="sheet-lead"><span id="acctSyncState">синхронизировано</span></p>
+        <div class="btn-col">
+          <button type="button" class="btn-primary" id="syncNowBtn">Синхронизировать сейчас</button>
+          <button type="button" class="btn-plain" id="pinSetBtn">PIN-код для этого устройства</button>
+          <button type="button" class="btn-plain" id="lockBtn">Заблокировать</button>
+          <button type="button" class="btn-danger-plain" id="logoutBtn">Выйти</button>
+        </div>
+        <p class="sheet-note">Выход не удаляет задачи: они остаются на устройстве в локальном режиме,
+          а при следующем входе синхронизация продолжится с того же места.</p>
+      </section>
+    </div>
+  </div>
+
+  <!-- Установка PIN -->
+  <form class="sheet sheet-plain" id="pinSheet" role="dialog" aria-modal="true" aria-labelledby="pinTitle" hidden>
+    <div class="sheet-grip" aria-hidden="true"></div>
+    <div class="sheet-head">
+      <span class="sheet-title" id="pinTitle">Установить PIN</span>
+      <button type="button" class="sheet-cancel" id="pinClose">Закрыть</button>
+    </div>
+    <div class="sheet-body">
+      <label class="field"><span>PIN (4–8 цифр)</span>
+        <input id="pinInput" type="password" inputmode="numeric" pattern="[0-9]*"
+               autocomplete="off" maxlength="8" required>
+      </label>
+      <label class="field" id="pinRepeatRow"><span>Повторите PIN</span>
+        <input id="pinRepeat" type="password" inputmode="numeric" pattern="[0-9]*"
+               autocomplete="off" maxlength="8">
+      </label>
+      <p class="form-error" id="pinError" role="alert" hidden></p>
+      <button type="submit" class="btn-primary" id="pinSubmit">Сохранить PIN</button>
+      <p class="sheet-note">PIN блокирует приложение на этом устройстве и хранится только здесь
+        (PBKDF2-SHA256, 120 000 итераций). Восстановить PIN нельзя — он не связан с паролем аккаунта.</p>
+    </div>
+  </form>
+
+  <!-- Экран блокировки -->
+  <form class="lock-overlay" id="lockOverlay" role="dialog" aria-modal="true" aria-labelledby="lockTitle" hidden>
+    <div class="lock-card">
+      <h2 class="lock-title" id="lockTitle">Задачи заблокированы</h2>
+      <p class="lock-lead">Введите PIN, чтобы открыть список.</p>
+      <label class="visually-hidden" for="lockPin">PIN-код</label>
+      <input id="lockPin" class="lock-input" type="password" inputmode="numeric" pattern="[0-9]*"
+             autocomplete="off" maxlength="8" required>
+      <p class="form-error" id="lockError" role="alert" hidden></p>
+      <button type="submit" class="btn-primary" id="lockSubmit">Разблокировать</button>
     </div>
   </form>
 

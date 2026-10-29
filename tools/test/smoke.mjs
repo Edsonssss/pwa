@@ -2,11 +2,15 @@
    Запуск: npm test
    Проверяет рендер, фильтры, поиск, undo, редактирование, XSS-экранирование
    и регрессии, найденные аудитом: сохранение при переполненном хранилище,
-   возврат фокуса, блокировка скролла под шторкой, снятие срока, a11y-атрибуты. */
+   возврат фокуса, блокировка скролла под шторкой, снятие срока, a11y-атрибуты.
+   Плюс новые сценарии: экспорт .json, импорт со слиянием, мягкое удаление
+   (надгробия), вход в аккаунт с синхронизацией и PIN-блокировка. */
 import { JSDOM, VirtualConsole } from 'jsdom';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { webcrypto } from 'node:crypto';
+import { TextEncoder, TextDecoder } from 'node:util';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
@@ -18,48 +22,91 @@ const ok = (name, cond, extra = '') => {
   else { failed++; console.log(`  ✗ ${name}${extra ? ' — ' + extra : ''}`); }
 };
 const section = (t) => console.log(`\n${t}`);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /* ---------- окружение ---------- */
-const problems = [];
-const vc = new VirtualConsole();
-vc.on('jsdomError', (e) => problems.push('JSDOM_ERROR: ' + (e.message || e)));
-vc.on('error', (...a) => problems.push('CONSOLE_ERROR: ' + a.join(' ')));
+/**
+ * @param {object} opts
+ * @param {string} opts.url            адрес страницы (?debug=1 открывает __pwa-хук)
+ * @param {boolean} [opts.subtle]      подменить window.crypto на node:webcrypto (нужен для PIN)
+ * @param {Function} [opts.fetch]      стаб fetch для /api/*
+ */
+function createEnv({ url, subtle = false, fetch: fetchImpl = null }) {
+  const problems = [];
+  const vc = new VirtualConsole();
+  vc.on('jsdomError', (e) => problems.push('JSDOM_ERROR: ' + (e.message || e)));
+  vc.on('error', (...a) => problems.push('CONSOLE_ERROR: ' + a.join(' ')));
 
-const dom = new JSDOM(html, {
-  runScripts: 'outside-only',
-  pretendToBeVisual: true,
-  url: 'https://example.com/app/',
-  virtualConsole: vc,
-});
-const w = dom.window;
-const d = w.document;
-const $ = (s) => d.querySelector(s);
-const $$ = (s) => [...d.querySelectorAll(s)];
+  const dom = new JSDOM(html, {
+    runScripts: 'outside-only',
+    pretendToBeVisual: true,
+    url,
+    virtualConsole: vc,
+  });
+  const w = dom.window;
+  const d = w.document;
 
-w.matchMedia = w.matchMedia || ((q) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} }));
-if (!w.crypto?.randomUUID) {
-  Object.defineProperty(w, 'crypto', { value: { randomUUID: () => 'u' + Math.random().toString(16).slice(2) } });
+  w.matchMedia = w.matchMedia || ((q) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} }));
+  if (subtle) {
+    Object.defineProperty(w, 'crypto', { value: webcrypto, configurable: true });
+  } else if (!w.crypto?.randomUUID) {
+    Object.defineProperty(w, 'crypto', { value: { randomUUID: () => 'u' + Math.random().toString(16).slice(2) } });
+  }
+  w.TextEncoder = TextEncoder;
+  w.TextDecoder = TextDecoder;
+  w.visualViewport = { height: 800, offsetTop: 0, addEventListener() {}, removeEventListener() {} };
+  w.requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 0);
+  w.scrollTo = () => {};   // jsdom не реализует scrollTo — нам достаточно отсутствия ошибки
+
+  const store = {};
+  const storage = {
+    getItem: (k) => (k in store ? store[k] : null),
+    setItem: (k, v) => { if (storage.__throw) throw new w.DOMException('QuotaExceededError'); store[k] = String(v); },
+    removeItem: (k) => { delete store[k]; },
+    clear() { for (const k in store) delete store[k]; },
+  };
+  Object.defineProperty(w, 'localStorage', { value: storage });
+  w.navigator.serviceWorker = { register: () => Promise.resolve({ active: null, addEventListener() {}, installing: null }) };
+  let confirmed = true;
+  w.confirm = () => confirmed;
+  if (fetchImpl) w.fetch = fetchImpl;
+
+  // перехват скачивания файла (экспорт)
+  const downloads = [];
+  w.URL.createObjectURL = (blob) => { downloads.push({ blob }); return 'blob:stub'; };
+  w.URL.revokeObjectURL = () => {};
+  w.HTMLAnchorElement.prototype.click = function () {
+    if (this.download) downloads[downloads.length - 1].name = this.download;
+  };
+
+  const env = {
+    dom, w, d, problems, store, storage, downloads,
+    $: (s) => d.querySelector(s),
+    $$: (s) => [...d.querySelectorAll(s)],
+    click: (el) => el.dispatchEvent(new w.MouseEvent('click', { bubbles: true })),
+    sleep,
+    set confirmed(v) { confirmed = v; },
+    get confirmed() { return confirmed; },
+    /** подменить FileList у #importFile и вызвать change */
+    async importJSON(payload) {
+      const input = d.querySelector('#importFile');
+      const file = { text: async () => JSON.stringify(payload) };
+      Object.defineProperty(input, 'files', { value: [file], configurable: true });
+      input.dispatchEvent(new w.Event('change', { bubbles: true }));
+      await sleep(40);
+    },
+    run() { w.eval(appjs); },
+    close() { w.close(); },
+  };
+  env.run();
+  return env;
 }
-w.visualViewport = { height: 800, offsetTop: 0, addEventListener() {}, removeEventListener() {} };
-w.requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 0);
-w.scrollTo = () => {};   // jsdom не реализует scrollTo — нам достаточно отсутствия ошибки
 
-const store = {};
-const storage = {
-  getItem: (k) => (k in store ? store[k] : null),
-  setItem: (k, v) => { if (storage.__throw) throw new w.DOMException('QuotaExceededError'); store[k] = String(v); },
-  removeItem: (k) => { delete store[k]; },
-  clear() { for (const k in store) delete store[k]; },
-};
-Object.defineProperty(w, 'localStorage', { value: storage });
-w.navigator.serviceWorker = { register: () => Promise.resolve({ active: null, addEventListener() {}, installing: null }) };
-let confirmed = true;
-w.confirm = () => confirmed;
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const click = (el) => el.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
-
-w.eval(appjs);
+/* =======================================================================
+   ЧАСТЬ 1: локальный режим (без аккаунта, без сети API, без crypto.subtle)
+   ======================================================================= */
+const A = createEnv({ url: 'https://example.com/app/' });
+const { w, d, $, $$, problems, store, storage, click } = A;
 await sleep(60);
 
 /* ---------- 1. старт ---------- */
@@ -73,6 +120,7 @@ ok('шторка — dialog с aria-modal', $('#sheet').getAttribute('role') ===
 ok('тост — role=status', $('#toast').getAttribute('role') === 'status');
 ok('галочка — role=switch с aria-checked', $$('#list .check').every((c) => c.getAttribute('role') === 'switch' && c.hasAttribute('aria-checked')));
 ok('полоса под статус-бар присутствует', !!$('.statusbar-strip'));
+ok('кнопка аккаунта доступна с aria-haspopup', $('#acctBtn')?.getAttribute('aria-haspopup') === 'dialog');
 
 /* ---------- 2. toggle + фокус ---------- */
 section('Переключение и возврат фокуса');
@@ -112,11 +160,11 @@ ok('кнопка «убрать срок» появилась', $('#taskDateClea
 click($('#taskDateClear'));
 ok('срок снимается кнопкой', $('#taskDate').value === '' && $('#taskDateClear').hidden === true);
 $('#taskDate').value = '2026-11-05';
-confirmed = false;                       // пользователь отменил закрытие
+A.confirmed = false;                       // пользователь отменил закрытие
 d.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
 await sleep(460);
 ok('Escape с черновиком спрашивает подтверждение и не закрывает', $('#sheet').hidden === false);
-confirmed = true;                        // пользователь согласен потерять черновик
+A.confirmed = true;                        // пользователь согласен потерять черновик
 d.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
 await sleep(480);
 ok('после подтверждения шторка закрыта и скролл разблокирован', $('#sheet').hidden === true && !d.body.classList.contains('sheet-open'));
@@ -147,25 +195,192 @@ ok('фильтр «Готово» и aria-pressed', segs[2].getAttribute('aria-p
 click(segs[0]);
 await sleep(30);
 
-/* ---------- 6. undo ---------- */
-section('Undo после удаления');
+/* ---------- 6. undo + мягкое удаление ---------- */
+section('Undo и надгробия удалений');
 const rowsBefore = $$('#list .row').length;
 click($('#list .row .row-delete'));
 await sleep(40);
-ok('строка удалена', $$('#list .row').length === rowsBefore - 1);
+ok('строка удалена из видимых', $$('#list .row').length === rowsBefore - 1);
 ok('тост предлагает вернуть', !$('#toastAction').hidden);
+const deletedInStore = JSON.parse(store['pwa-tasks:v1']).tasks.filter((t) => t.deleted);
+ok('удаление записано надгробием (deleted:true)', deletedInStore.length === 1 && typeof deletedInStore[0].updatedAt === 'number');
 click($('#toastAction'));
 await sleep(40);
 ok('undo вернул строку', $$('#list .row').length === rowsBefore);
+ok('после undo надгробие снято', JSON.parse(store['pwa-tasks:v1']).tasks.every((t) => !t.deleted));
 
-/* ---------- 7. персистентность ---------- */
+/* ---------- 7. экспорт .json ---------- */
+section('Экспорт в .json');
+A.downloads.length = 0;
+click($('#exportBtn'));
+await sleep(40);
+const dl = A.downloads[A.downloads.length - 1];
+const name = dl?.name || '';
+ok('скачан файл pwa-tasks-ГГГГ-ММ-ДД.json', /^pwa-tasks-\d{4}-\d{2}-\d{2}\.json$/.test(name), name);
+const exported = JSON.parse(await dl.blob.text());
+ok('в файле app/v2/exportedAt', exported.app === 'pwa-tasks' && exported.v === 2 && !Number.isNaN(Date.parse(exported.exportedAt)));
+ok('экспортированы только неудалённые задачи', exported.tasks.length === $$('#list .row').length + 0 || exported.tasks.every((t) => !t.deleted));
+ok('в локальном режиме account === null', exported.account === null);
+
+/* ---------- 8. импорт со слиянием (LWW) ---------- */
+section('Импорт: слияние вместо затирания');
+const current = exported.tasks;
+const base = current[0];
+const remoteNewer = { ...base, title: 'Обновлено с другого устройства', updatedAt: Date.now() + 60_000 };
+const stale = { ...current[1], title: 'Устаревшая копия', updatedAt: 1 };
+const fresh = { id: 'imp-1', title: 'Новая из файла', note: '', due: '', prio: 0, done: false, deleted: false, createdAt: Date.now(), completedAt: null, updatedAt: Date.now() };
+await A.importJSON({ app: 'pwa-tasks', v: 2, tasks: [remoteNewer, stale, fresh] });
+const merged = JSON.parse(store['pwa-tasks:v1']).tasks;
+const byId = (id) => merged.find((t) => t.id === id);
+ok('более свежая версия победила', byId(base.id).title === 'Обновлено с другого устройства', byId(base.id).title);
+ok('устаревшая версия не перезаписала локальную', byId(current[1].id).title !== 'Устаревшая копия');
+ok('новая задача из файла добавлена', !!byId('imp-1'));
+ok('импорт не удалил остальные задачи', merged.length >= current.length + 1, `${merged.length} vs ${current.length}`);
+
+/* ---------- 9. персистентность ---------- */
 section('Персистентность');
 const raw = JSON.parse(store['pwa-tasks:v1']);
 ok('схема хранит версию', raw.v === 2);
 ok('задачи валидны нормализатором', raw.tasks.every((t) => t.id && typeof t.title === 'string'));
+ok('у каждой задачи есть updatedAt для синхронизации', raw.tasks.every((t) => typeof t.updatedAt === 'number' && t.updatedAt > 0));
+
+/* =======================================================================
+   ЧАСТЬ 2: аккаунт, синхронизация, PIN (crypto.subtle + стаб fetch)
+   ======================================================================= */
+section('\nАккаунт, синхронизация, PIN');
+const REMOTE_ID = 'remote-1';
+const apiCalls = [];
+let serverNow = Date.now();
+const remoteTask = {
+  id: REMOTE_ID, title: 'Задача со второго устройства', note: '', due: '', prio: 1,
+  done: false, deleted: false, createdAt: serverNow, completedAt: null, updatedAt: serverNow,
+};
+const fetchStub = async (url, opts = {}) => {
+  apiCalls.push({ url, method: opts.method || 'GET', body: opts.body, headers: opts.headers });
+  const json = (data, status = 200) => ({
+    ok: status < 400, status, json: async () => data,
+  });
+  if (url === '/api/login' || url === '/api/register') {
+    return json({ token: 'tok-123', user: { id: 'u1', email: 'anna@example.com' } });
+  }
+  if (url === '/api/me') return json({ user: { id: 'u1', email: 'anna@example.com' } });
+  if (url === '/api/logout') return json({ ok: true });
+  if (url === '/api/tasks') {
+    serverNow = Date.now();
+    const body = opts.body ? JSON.parse(opts.body) : {};
+    // сервер отвечает задачами, изменёнными после since: отдаём удалённую задачу
+    return json({ serverNow, tasks: body.since ? [remoteTask] : [remoteTask] });
+  }
+  return json({ error: 'not found' }, 404);
+};
+
+const B = createEnv({ url: 'https://example.com/app/?debug=1', subtle: true, fetch: fetchStub });
+await sleep(60);
+const b$ = B.$, b$$ = B.$$;
+
+ok('нет ошибок при загрузке с debug-хуком', B.problems.length === 0, B.problems.join(' | '));
+ok('debug-хук __pwa доступен', !!B.w.__pwa && typeof B.w.__pwa.mergeTasks === 'function');
+ok('mergeTasks: побеждает больший updatedAt',
+  B.w.__pwa.mergeTasks(
+    [{ id: 'x', updatedAt: 10, title: 'старая' }],
+    [{ id: 'x', updatedAt: 20, title: 'новая' }],
+  )[0].title === 'новая');
+ok('mergeTasks: локальная свежее — остаётся',
+  B.w.__pwa.mergeTasks(
+    [{ id: 'y', updatedAt: 30, title: 'локальная' }],
+    [{ id: 'y', updatedAt: 5, title: 'серверная' }],
+  )[0].title === 'локальная');
+
+// --- вход с переносом локальных задач ---
+B.click(b$('#acctBtn'));
+await sleep(60);
+ok('шторка аккаунта открыта (dialog)', !b$('#acctSheet').hidden && b$('#acctSheet').getAttribute('role') === 'dialog');
+ok('анонимный блок виден, авторизованный скрыт', !b$('#acctAnon').hidden && b$('#acctIn').hidden);
+B.click(b$('#authLogin'));
+await sleep(60);
+ok('форма входа раскрыта', !b$('#authFields').hidden && b$('#authModeTitle').textContent === 'Вход');
+b$('#authEmail').value = 'Anna@Example.com';
+b$('#authPassword').value = 'supersecret1';
+// локальное хранилище появляется после первой записи — переключаем задачу
+B.click(b$('#list .row .check'));
+await sleep(40);
+const localBefore = B.w.__pwa.state.tasks.length;
+b$('#authFields').dispatchEvent(new B.w.Event('submit', { bubbles: true, cancelable: true }));
+await sleep(120);
+ok('аккаунт сохранён в localStorage', JSON.parse(B.store['pwa-tasks:account'] || 'null')?.token === 'tok-123');
+const acctTasks = JSON.parse(B.store['pwa-tasks:v2:u1'] || '{}').tasks || [];
+const localIds = new Set(JSON.parse(B.store['pwa-tasks:v1']).tasks.map((t) => t.id));
+ok('задачи перенесены в хранилище аккаунта', acctTasks.length >= localBefore && [...localIds].every((id) => acctTasks.some((t) => t.id === id)), `${acctTasks.length} vs ${localBefore}`);
+ok('локальное хранилище не очищено (можно выйти обратно)', JSON.parse(B.store['pwa-tasks:v1']).tasks.length === localBefore);
+ok('чип аккаунта показывает инициалы', b$('#acctInitials').textContent === 'AN', b$('#acctInitials').textContent);
+ok('в тосте подтверждён вход', /Вход выполнен/.test(b$('#toastText').textContent), b$('#toastText').textContent);
+
+// --- синхронизация ---
+apiCalls.length = 0;
+await B.w.__pwa.syncNow();
+await sleep(40);
+const push = apiCalls.find((c) => c.url === '/api/tasks' && c.method === 'POST');
+ok('push идёт с Bearer-токеном', push?.headers?.Authorization === 'Bearer tok-123', JSON.stringify(push?.headers));
+ok('push отправляет задачи аккаунта', !!push && JSON.parse(push.body).tasks.length >= localBefore);
+ok('после синхронизации подтянута задача с сервера',
+  B.w.__pwa.state.tasks.some((t) => t.id === REMOTE_ID),
+  `${B.w.__pwa.state.tasks.length} задач`);
+ok('подтянутая задача отрисована в списке', b$$('#list .row').length === localBefore + 1, `${b$$('#list .row').length} строк`);
+ok('курсор since сохранён', Number(B.store['pwa-tasks:pull:u1']) > 0, B.store['pwa-tasks:pull:u1']);
+ok('индикатор синхронизации — ok', b$('#acctDot').className.includes('ok'), b$('#acctDot').className);
+
+// --- PIN ---
+B.click(b$('#acctBtn'));
+await sleep(60);
+ok('в аккаунте видно e-mail', b$('#acctEmail').textContent === 'anna@example.com', b$('#acctEmail').textContent);
+ok('кнопка PIN доступна (есть crypto.subtle)', !b$('#pinSetBtn').hidden);
+B.click(b$('#pinSetBtn'));
+await sleep(60);
+b$('#pinInput').value = '2468';
+b$('#pinRepeat').value = '1357';
+b$('#pinSheet').dispatchEvent(new B.w.Event('submit', { bubbles: true, cancelable: true }));
+await sleep(120);
+ok('несовпавший PIN отклонён', !b$('#pinError').hidden && /не совпадает/i.test(b$('#pinError').textContent));
+b$('#pinRepeat').value = '2468';
+b$('#pinSheet').dispatchEvent(new B.w.Event('submit', { bubbles: true, cancelable: true }));
+await sleep(600);
+const pinRec = JSON.parse(B.store['pwa-tasks:pin:u1'] || 'null');
+ok('PIN сохранён хэшем с солью (не в открытом виде)', !!pinRec && !!pinRec.salt && /^[0-9a-f]{64}$/.test(pinRec.hash));
+ok('в хранилище нет открытого PIN', !JSON.stringify(B.store).includes('"2468"'));
+ok('шторка PIN закрыта', b$('#pinSheet').hidden === true);
+B.click(b$('#lockBtn'));
+await sleep(520);
+ok('экран блокировки показан', !b$('#lockOverlay').hidden && b$('#lockOverlay').getAttribute('aria-modal') === 'true');
+b$('#lockPin').value = '9999';
+b$('#lockOverlay').dispatchEvent(new B.w.Event('submit', { bubbles: true, cancelable: true }));
+await sleep(250);
+ok('неверный PIN не пускает', !b$('#lockOverlay').hidden && /Неверный PIN/.test(b$('#lockError').textContent));
+b$('#lockPin').value = '2468';
+b$('#lockOverlay').dispatchEvent(new B.w.Event('submit', { bubbles: true, cancelable: true }));
+await sleep(300);
+ok('верный PIN разблокировал приложение', b$('#lockOverlay').hidden === true);
+
+// --- экспорт из-под аккаунта ---
+B.downloads.length = 0;
+B.click(b$('#exportBtn'));
+await sleep(40);
+const bExport = JSON.parse(await B.downloads[B.downloads.length - 1].blob.text());
+ok('экспорт из аккаунта помечен e-mail', bExport.account === 'anna@example.com', String(bExport.account));
+ok('экспорт содержит синхронизированные задачи', bExport.tasks.some((t) => t.id === REMOTE_ID));
+
+// --- выход ---
+B.click(b$('#acctBtn'));
+await sleep(60);
+B.click(b$('#logoutBtn'));
+await sleep(600);
+ok('после выхода аккаунт удалён', !B.store['pwa-tasks:account']);
+ok('после выхода видны локальные задачи', JSON.parse(B.store['pwa-tasks:v1']).tasks.length > 0);
+ok('чип аккаунта вернулся в анонимное состояние', b$('#acctInitials').textContent === '•');
 
 /* ---------- итог ---------- */
 console.log(`\n${passed} проверок пройдено, ${failed} провалено`);
-if (problems.length) { console.log('Необработанные ошибки окружения:'); console.log(problems.join('\n')); }
+const allProblems = [...problems, ...B.problems];
+if (allProblems.length) { console.log('Необработанные ошибки окружения:'); console.log(allProblems.join('\n')); }
 w.close();               // гасим таймеры приложения, чтобы процесс завершился
-process.exit(failed || problems.length ? 1 : 0);
+B.close();
+process.exit(failed || allProblems.length ? 1 : 0);

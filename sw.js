@@ -1,5 +1,5 @@
 /* Service Worker: офлайн-оболочка приложения. */
-const VERSION = 'v1.1.0';
+const VERSION = 'v1.2.0';
 const CACHE = `pwa-tasks-${VERSION}`;
 
 const PRECACHE = [
@@ -57,6 +57,8 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return; // чужие origin не трогаем
+  // API синхронизации всегда идёт в сеть: кэш вернул бы устаревшие задачи/токены
+  if (url.pathname.startsWith('/api/')) return;
 
   // Навигация: сеть → кэш (офлайн открываем оболочку или офлайн-страницу)
   if (req.mode === 'navigate') {

@@ -1,12 +1,15 @@
 {
   "name": "pwa-tasks",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
-  "description": "Офлайн-PWA «список дел» в стиле нативного iOS. Без сборки и рантайм-зависимостей.",
+  "description": "Офлайн-PWA «список дел» в стиле нативного iOS: локальный режим, аккаунты с синхронизацией между устройствами, PIN и экспорт в .json. Без сборки и рантайм-зависимостей.",
   "type": "commonjs",
   "scripts": {
-    "start": "node serve.js 8080",
-    "test": "node tools/test/smoke.mjs",
+    "start": "node server.js 8080",
+    "serve:static": "node serve.js 8081",
+    "test": "npm run test:smoke && npm run test:api",
+    "test:smoke": "node tools/test/smoke.mjs",
+    "test:api": "node tools/test/api.mjs",
     "icons": "node tools/gen-icons.js"
   },
   "devDependencies": {

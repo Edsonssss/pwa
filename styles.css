@@ -20,6 +20,8 @@
   --placeholder: #6e6e73; /* плейсхолдеры = secondary, 4.5+:1 */
   --thumb-dark: #74747a;  /* 4.64:1 белый текст, 3.08:1 к треку */
   --toast-action: #8ec5ff;/* синяя ссылка на тёмном тосте >= 4.5:1 */
+  --btn-bg: #0066d6;      /* залитая кнопка: 5.42:1 с белым текстом */
+  --btn-fg: #ffffff;
   --shadow: 0 6px 24px rgba(0, 0, 0, .14);
   --spring: cubic-bezier(.32, .72, 0, 1);
   /* Высота статус-бара: safe-area на устройствах с «чёлкой», 20px на классических.
@@ -50,6 +52,8 @@
     --placeholder: #a1a1a6;
     --thumb-dark: #74747a;  /* 4.64:1 белый текст, 3.08:1 к треку */
     --toast-action: #8ec5ff;
+    --btn-bg: #0a84ff;      /* 4.91:1 с тёмно-синим текстом */
+    --btn-fg: #00182f;
     --shadow: 0 6px 24px rgba(0, 0, 0, .5);
     color-scheme: dark;
   }
@@ -578,4 +582,161 @@ body.sheet-open .fab { opacity: 0; transform: scale(.6); pointer-events: none; }
 /* Десктоп: чуть «шире воздуха» */
 @media (min-width: 700px) {
   .content { padding-top: 24px; }
+}
+
+/* ============ Аккаунт и синхронизация ============ */
+.acct {
+  position: relative;
+  margin-left: auto;
+  width: 34px; height: 34px;
+  border-radius: 50%;
+  background: var(--fill);
+  display: flex; align-items: center; justify-content: center;
+  flex: none;
+}
+.acct-initials {
+  font-size: 12px; font-weight: 700;
+  color: var(--label);
+  letter-spacing: .2px;
+}
+.sync-dot {
+  position: absolute; right: -1px; bottom: -1px;
+  width: 11px; height: 11px;
+  border-radius: 50%;
+  background: var(--tertiary);
+  border: 2px solid var(--bg);
+}
+.sync-dot.ok { background: var(--green); }
+.sync-dot.error { background: var(--red-fill); }
+.sync-dot.syncing { background: var(--orange); animation: sync-pulse 1s ease-in-out infinite; }
+@keyframes sync-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) {
+  .sync-dot.syncing { animation: none; }
+}
+
+/* ============ Шторки аккаунта / PIN ============ */
+.sheet-plain {
+  max-height: 86vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.sheet-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 16px 8px;
+}
+.sheet-lead {
+  margin: 0 0 4px;
+  font-size: 14px; line-height: 1.45;
+  color: var(--secondary);
+}
+.sheet-sub {
+  margin: 12px 0 8px;
+  font-size: 13px; font-weight: 600;
+  letter-spacing: .4px; text-transform: uppercase;
+  color: var(--secondary);
+}
+.sheet-note {
+  margin: 12px 0 0;
+  font-size: 12.5px; line-height: 1.4;
+  color: var(--secondary);
+}
+.acct-email { margin: 0; font-size: 17px; font-weight: 600; }
+
+.btn-row { display: flex; gap: 10px; margin-top: 14px; }
+.btn-col { display: grid; gap: 10px; margin-top: 14px; }
+.btn-primary, .btn-plain, .btn-danger-plain {
+  min-height: 46px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  font-size: 16px; font-weight: 600;
+  flex: 1 1 auto;
+}
+.btn-primary { background: var(--btn-bg); color: var(--btn-fg); }
+.btn-primary:active { opacity: .85; }
+.btn-plain { background: var(--card); color: var(--accent-text); }
+.btn-danger-plain { background: var(--card); color: var(--red); }
+.btn-plain:active, .btn-danger-plain:active { background: var(--fill); }
+.btn-col .btn-plain, .btn-col .btn-danger-plain, .btn-col .btn-primary { width: 100%; }
+
+.field { display: block; margin-top: 10px; }
+.field > span {
+  display: block;
+  font-size: 13px; font-weight: 600;
+  color: var(--secondary);
+  margin-bottom: 5px;
+}
+.field input {
+  width: 100%;
+  border: .5px solid var(--separator);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--label);
+  font: inherit;
+  padding: 11px 12px;
+  -webkit-appearance: none; appearance: none;
+}
+.field input:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 1px;
+}
+.switch-row {
+  display: flex; align-items: flex-start; gap: 10px;
+  margin-top: 12px;
+  font-size: 15px; line-height: 1.35;
+  color: var(--label);
+}
+.switch-row input {
+  flex: none;
+  width: 22px; height: 22px;
+  margin-top: 1px;
+  accent-color: var(--accent);
+}
+.form-error {
+  margin: 10px 0 0;
+  font-size: 14px; line-height: 1.35;
+  color: var(--red);
+}
+.form-error[hidden] { display: none; }
+
+/* ============ Экран блокировки по PIN ============ */
+.lock-overlay {
+  position: fixed; inset: 0;
+  z-index: 70;
+  background: var(--bg);
+  display: flex; align-items: center; justify-content: center;
+  padding: calc(24px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom));
+}
+.lock-overlay[hidden] { display: none; }
+.lock-card {
+  width: 100%; max-width: 360px;
+  background: var(--card);
+  border-radius: 18px;
+  padding: 26px 22px;
+  text-align: center;
+  box-shadow: var(--shadow);
+}
+.lock-title { margin: 0; font-size: 20px; font-weight: 700; }
+.lock-lead { margin: 6px 0 16px; font-size: 14px; color: var(--secondary); }
+.lock-input {
+  width: 100%;
+  border: .5px solid var(--separator);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--label);
+  font-size: 26px; font-weight: 600;
+  letter-spacing: 10px;
+  text-align: center;
+  padding: 10px 0 10px 10px;
+  -webkit-appearance: none; appearance: none;
+}
+.lock-input:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 1px; }
+.lock-card .btn-primary { width: 100%; margin-top: 14px; }
+
+/* ============ Подсказка под кнопками данных ============ */
+.data-row { flex-wrap: wrap; }
+.data-hint {
+  margin: 10px 24px 0;
+  font-size: 12.5px; line-height: 1.4;
+  color: var(--secondary);
+  text-align: center;
 }
