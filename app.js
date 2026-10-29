@@ -416,15 +416,20 @@
   let sheetSnapshot = '';
   let sheetOpener = null;
   let lockY = 0;
+  let lockDepth = 0;          // вложенные шторки (аккаунт → PIN): разблокируем только закрыв все
   const sheetSnapshotNow = () => JSON.stringify([els.taskTitle.value, els.taskNote.value, els.taskDate.value, getPrio()]);
   const isDirty = () => sheetSnapshotNow() !== sheetSnapshot;
 
   function lockScroll() {
+    lockDepth++;
+    if (lockDepth > 1) return;
     lockY = window.scrollY;
     document.body.style.top = `-${lockY}px`;
     document.body.classList.add('sheet-open');
   }
   function unlockScroll() {
+    lockDepth = Math.max(0, lockDepth - 1);
+    if (lockDepth > 0) return;
     document.body.classList.remove('sheet-open');
     document.body.style.top = '';
     window.scrollTo(0, lockY);
