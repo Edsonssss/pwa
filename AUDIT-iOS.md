@@ -74,13 +74,20 @@ body.scrolled .navbar-bg { opacity: 1; }
 /* новый слой, который iOS 27 примет как «фон статус-бара» */
 .statusbar-strip{
   position: fixed; top: 0; left: 0; right: 0;   /* ширина 100% ≥ 80%, у верха 0px ≤ 4px */
-  height: calc(env(safe-area-inset-top) + 44px);/* ≥ 6px */
+  height: var(--statusbar);                     /* ≥ 6px: ТОЛЬКО статус-бар, без навбар-полосы */
   background: var(--bg);                         /* сплошной, не rgba */
   z-index: 39;                                   /* под .navbar-bg, над контентом */
 }
+:root{ --statusbar: max(env(safe-area-inset-top), 20px); }
+body { padding-top: var(--statusbar); }          /* контент начинается НИЖЕ полосы */
 ```
 
 и в `index.html` первым узлом внутри `<body>`: `<div class="statusbar-strip"></div>`. Тогда blur исчезает и на светлой, и на тёмной теме. `.navbar-bg` с блюром можно оставить как декоративный слой ниже.
+
+> **Урок с устройства (2026-10-29, скриншот iPhone):** первая версия правки задавала полосе высоту
+> `inset + 44px`, и непрозрачная полоса обрезала верх large-title «Задачи». Полоса должна равняться
+> ровно высоте статус-бара, а отступ контента — той же величине (`--statusbar`); итоговая формула выше.
+> Проверено: blur отсутствует, глифы статус-бара тёмные и читаемые в светлой теме.
 
 ### 2.2 `black-translucent` в светлой теме (iOS ≤ 18)
 

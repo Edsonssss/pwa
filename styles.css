@@ -22,6 +22,9 @@
   --toast-action: #8ec5ff;/* синяя ссылка на тёмном тосте >= 4.5:1 */
   --shadow: 0 6px 24px rgba(0, 0, 0, .14);
   --spring: cubic-bezier(.32, .72, 0, 1);
+  /* Высота статус-бара: safe-area на устройствах с «чёлкой», 20px на классических.
+     Одно значение для полосы и отступа контента, чтобы полоса ничего не перекрывала. */
+  --statusbar: max(env(safe-area-inset-top), 20px);
   color-scheme: light;
 }
 
@@ -65,7 +68,7 @@ body {
   font: 400 17px/1.35 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
   overscroll-behavior-y: none;
-  padding-top: env(safe-area-inset-top);
+  padding-top: var(--statusbar);
   touch-action: manipulation;
 }
 
@@ -103,7 +106,7 @@ input, textarea { font: inherit; color: inherit; }
 .statusbar-strip {
   position: fixed;
   top: 0; left: 0; right: 0;          /* ширина 100% (>= 80%), отступ от верха 0 (<= 4px) */
-  height: calc(env(safe-area-inset-top) + 44px); /* >= 6px */
+  height: var(--statusbar);           /* >= 6px: только сам статус-бар, не навбар-полоса */
   background: var(--bg);              /* сплошной цвет: iOS 27 убирает blur */
   z-index: 39;
 }
@@ -119,8 +122,8 @@ input, textarea { font: inherit; color: inherit; }
   position: fixed;
   top: 0; left: 0; right: 0;
   z-index: 40;
-  height: calc(44px + env(safe-area-inset-top));
-  padding-top: env(safe-area-inset-top);
+  height: calc(44px + var(--statusbar));
+  padding-top: var(--statusbar);
   pointer-events: none;
 }
 .navbar-bg {
