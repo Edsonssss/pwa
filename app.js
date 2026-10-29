@@ -6,6 +6,7 @@
 
   const LOCAL_STORE_KEY = 'pwa-tasks:v1';
   const ACCOUNT_KEY = 'pwa-tasks:account';
+  const API_BASE_KEY = 'pwa-tasks:api-base';
   const TOMBSTONE_TTL_MS = 30 * 24 * 3600 * 1000;
   const $ = (s) => document.querySelector(s);
 
@@ -60,6 +61,10 @@
     authError: $('#authError'),
     authSubmit: $('#authSubmit'),
     authCancel: $('#authCancel'),
+    serverState: $('#serverState'),
+    apiBase: $('#apiBase'),
+    apiBaseSave: $('#apiBaseSave'),
+    apiBaseReset: $('#apiBaseReset'),
     syncNowBtn: $('#syncNowBtn'),
     pinSetBtn: $('#pinSetBtn'),
     lockBtn: $('#lockBtn'),
@@ -90,6 +95,18 @@
     } catch { /* ignore */ }
     return null;
   }
+  /* Адрес API: по умолчанию тот же origin; можно задать другой (статика на Pages,
+     server.js на отдельном хостинге) — тогда на сервере нужен ALLOWED_ORIGINS. */
+  let apiBase = readApiBase();
+  function readApiBase() {
+    try {
+      const v = (localStorage.getItem(API_BASE_KEY) || '').trim().replace(/\/+$/, '');
+      return /^https?:\/\//i.test(v) ? v : '';
+    } catch { return ''; }
+  }
+  const apiUrl = (p) => apiBase + p;
+  let serverOk = null;   // null — ещё не проверяли
+
   const storeKey = () => (account ? `pwa-tasks:v2:${account.id}` : LOCAL_STORE_KEY);
   const pullKey = () => `pwa-tasks:pull:${account ? account.id : 'local'}`;
 
@@ -683,7 +700,7 @@
     return [...byId.values()];
   }
   async function api(path, opts = {}) {
-    const res = await fetch(path, {
+    const res = await fetch(apiUrl(path), {
       ...opts,
       headers: {
         'Content-Type': 'application/json',
@@ -709,7 +726,8 @@
         body: JSON.stringify({ since, tasks: state.tasks }),
       });
       if (!res.ok) throw new Error('http ' + res.status);
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
+      if (!data || !Array.isArray(data.tasks)) throw new Error('bad response');
       const remote = (data.tasks || []).map(normalizeTask).filter(Boolean);
       const purged = purgeOldTombstones();
       state.tasks = mergeTasks(state.tasks, remote);
@@ -741,10 +759,44 @@
       setSyncUI('off');
     }
   }
+  function renderServerState() {
+    const where = apiBase || 'этот сайт';
+    let text, cls;
+    if (typeof fetch !== 'function') { text = 'сервер не проверить: нужен HTTPS или localhost'; cls = 'bad'; }
+    else if (serverOk === null) { text = `проверяем сервер (${where})…`; cls = ''; }
+    else if (serverOk) { text = `сервер синхронизации отвечает (${where})`; cls = 'ok'; }
+    else if (!navigator.onLine) { text = 'нет подключения — задачи доступны локально'; cls = 'bad'; }
+    else { text = `сервер не отвечает: по адресу ${where} нет API`; cls = 'bad'; }
+    els.serverState.textContent = text;
+    els.serverState.className = 'server-state' + (cls ? ' ' + cls : '');
+  }
+  /** Пинг /api/health: по нему видно, развёрнут ли API там, откуда открыто приложение. */
+  async function probeServer() {
+    renderServerState();
+    if (typeof fetch !== 'function') { serverOk = false; renderServerState(); return false; }
+    const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = ctl ? setTimeout(() => ctl.abort(), 6000) : null;
+    try {
+      const res = await fetch(apiUrl('/api/health'), {
+        method: 'GET', cache: 'no-store', signal: ctl ? ctl.signal : undefined,
+      });
+      const data = await res.json().catch(() => null);
+      serverOk = !!(res.ok && data && data.ok);
+    } catch {
+      serverOk = false;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    renderServerState();
+    if (!account) setSyncUI(serverOk ? 'off' : 'error');
+    return serverOk;
+  }
   function openAcct() {
     accountUI();
     els.authFields.hidden = true;
     els.authError.hidden = true;
+    els.apiBase.value = apiBase;
+    if (!account) probeServer(); else renderServerState();
     els.acctSheet.hidden = false;
     els.backdrop.hidden = false;
     lockScroll();
@@ -766,6 +818,27 @@
   els.acctBtn.addEventListener('click', openAcct);
   els.acctClose.addEventListener('click', closeAcct);
 
+  els.apiBaseSave.addEventListener('click', async () => {
+    const raw = els.apiBase.value.trim().replace(/\/+$/, '');
+    if (raw && !/^https?:\/\//i.test(raw)) {
+      els.authError.textContent = 'Адрес сервера должен начинаться с https:// (или http:// для localhost)';
+      els.authError.hidden = false;
+      return;
+    }
+    els.authError.hidden = true;
+    apiBase = raw;
+    try {
+      if (raw) localStorage.setItem(API_BASE_KEY, raw); else localStorage.removeItem(API_BASE_KEY);
+    } catch { /* приватный режим — значение останется до перезапуска */ }
+    serverOk = null;
+    const alive = await probeServer();
+    showToast(alive ? 'Сервер отвечает' : 'Сервер не отвечает — проверьте адрес и ALLOWED_ORIGINS');
+  });
+  els.apiBaseReset.addEventListener('click', () => {
+    els.apiBase.value = '';
+    els.apiBaseSave.click();
+  });
+
   function setAuthMode(mode) {
     authMode = mode;
     els.authModeTitle.textContent = mode === 'login' ? 'Вход' : 'Регистрация';
@@ -782,47 +855,71 @@
     account = null;
     try { localStorage.removeItem(ACCOUNT_KEY); } catch { /* ignore */ }
   }
+  /** Понятный текст ошибки входа: отличаем «нет API на этом хостинге» от «нет сети». */
+  function authFailMessage(res, data, networkError) {
+    if (networkError) {
+      if (!navigator.onLine) return 'Нет подключения к интернету. Задачи сохранятся локально, вход выполните позже.';
+      return serverOk === false
+        ? `Сервер синхронизации не отвечает (${apiUrl('/api')}). Если сайт открыт со статического хостинга (GitHub Pages, Netlify), API там нет: запустите server.js или укажите адрес сервера в блоке «Сервер синхронизации».`
+        : `Не удалось связаться с сервером (${apiUrl('/api')}). Проверьте интернет и адрес сервера.`;
+    }
+    if (data && data.error) return data.error;
+    if (res && res.status === 404) return `По адресу ${apiUrl('/api')} нет API: приложение открыто без server.js (статический хостинг).`;
+    if (res && res.status >= 500) return `Ошибка сервера (${res.status}). Попробуйте ещё раз через минуту.`;
+    return `Сервер ответил ошибкой${res ? ` (${res.status})` : ''}`;
+  }
+  function showAuthError(text) {
+    els.authError.textContent = text;
+    els.authError.hidden = false;
+  }
   async function submitAuth(e) {
     e.preventDefault();
     const email = els.authEmail.value.trim();
     const password = els.authPassword.value;
     els.authError.hidden = true;
     if (typeof fetch !== 'function') {
-      els.authError.textContent = 'Синхронизация доступна только по HTTPS или localhost';
-      els.authError.hidden = false;
+      showAuthError('Синхронизация доступна только по HTTPS или localhost: браузер не даёт сетевые запросы и crypto.subtle в незащищённом контексте.');
+      return;
+    }
+    if (!email || password.length < 8) {
+      showAuthError('Нужны e-mail и пароль минимум 8 символов.');
       return;
     }
     // локальные задачи ДО переключения хранилища — для переноса
     const localBefore = account ? [] : state.tasks.slice();
+    let res = null, data = null, networkError = false;
     try {
-      const res = await fetch(`/api/${authMode === 'login' ? 'login' : 'register'}`, {
+      res = await fetch(apiUrl(`/api/${authMode === 'login' ? 'login' : 'register'}`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        els.authError.textContent = data.error || 'Не удалось выполнить вход';
-        els.authError.hidden = false;
-        return;
-      }
-      account = { id: data.user.id, email: data.user.email, token: data.token };
-      localStorage.setItem(ACCOUNT_KEY, JSON.stringify(account));
-      state.tasks = load();
-      if (els.authMigrate.checked && localBefore.length) {
-        state.tasks = mergeTasks(state.tasks, localBefore.map((t) => ({ ...t })));
-      }
-      save();
-      locked = false;
-      accountUI();
-      render(true);
-      closeAcct();
-      showToast(`Вход выполнен: ${account.email}`);
-      syncNow();
-    } catch {
-      els.authError.textContent = 'Сервер недоступен. Проверьте сеть или где развёрнут API.';
-      els.authError.hidden = false;
+      data = await res.json().catch(() => null);
+    } catch { networkError = true; }
+
+    // сначала свежая диагностика, иначе текст ошибки опишет устаревшее состояние сервера
+    if (networkError) await probeServer();
+    if (networkError || !res || !res.ok || !data || !data.token || !data.user) {
+      showAuthError(!networkError && res && res.ok
+        ? 'Сервер ответил неожиданным форматом (нет токена). Похоже, по этому адресу не server.js этого проекта.'
+        : authFailMessage(res, data, networkError));
+      if (!networkError) probeServer();
+      return;
     }
+    account = { id: data.user.id, email: data.user.email, token: data.token };
+    try { localStorage.setItem(ACCOUNT_KEY, JSON.stringify(account)); } catch { /* приватный режим */ }
+    state.tasks = load();
+    if (els.authMigrate.checked && localBefore.length) {
+      state.tasks = mergeTasks(state.tasks, localBefore.map((t) => ({ ...t })));
+    }
+    save();
+    locked = false;
+    serverOk = true;
+    accountUI();
+    render(true);
+    closeAcct();
+    showToast(`Вход выполнен: ${account.email}`);
+    syncNow();
   }
   els.authFields.addEventListener('submit', submitAuth);
 
@@ -1031,6 +1128,6 @@
 
   // отладочный хук для тестов: ?debug=1
   if (new URLSearchParams(location.search).has('debug')) {
-    window.__pwa = { mergeTasks, syncNow, scheduleSync, get account() { return account; }, state, normalizeTask, exportPayload };
+    window.__pwa = { mergeTasks, syncNow, scheduleSync, probeServer, get account() { return account; }, state, normalizeTask, exportPayload };
   }
 })();

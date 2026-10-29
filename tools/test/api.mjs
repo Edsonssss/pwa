@@ -20,7 +20,7 @@ const ok = (name, cond, extra = '') => {
 };
 
 const child = spawn(process.execPath, [path.join(ROOT, 'server.js'), String(PORT)], {
-  env: { ...process.env, DATA_DIR: DATA },
+  env: { ...process.env, DATA_DIR: DATA, ALLOWED_ORIGINS: 'https://allowed.example.org' },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 let logs = '';
@@ -47,6 +47,23 @@ async function waitForServer(tries = 60) {
 
 try {
   await waitForServer();
+
+  console.log('\nДоступность и CORS');
+  const health = await api('/api/health');
+  ok('health публичный: 200 + ok:true + версия', health.status === 200 && health.body.ok === true && /^\d+\.\d+/.test(health.body.version || ''), JSON.stringify(health.body));
+  const pre = await fetch(base + '/api/tasks', {
+    method: 'OPTIONS',
+    headers: { Origin: 'https://allowed.example.org', 'Access-Control-Request-Method': 'POST' },
+  });
+  ok('preflight разрешённого origin: 204 + Allow-Origin', pre.status === 204 && pre.headers.get('access-control-allow-origin') === 'https://allowed.example.org', String(pre.headers.get('access-control-allow-origin')));
+  ok('preflight отдаёт Allow-Headers с Authorization', (pre.headers.get('access-control-allow-headers') || '').includes('Authorization'));
+  const preBad = await fetch(base + '/api/tasks', {
+    method: 'OPTIONS',
+    headers: { Origin: 'https://evil.example.com', 'Access-Control-Request-Method': 'POST' },
+  });
+  ok('чужому origin CORS-заголовков нет', !preBad.headers.get('access-control-allow-origin'), String(preBad.headers.get('access-control-allow-origin')));
+  const healthCors = await fetch(base + '/api/health', { headers: { Origin: 'https://allowed.example.org' } });
+  ok('обычный запрос с разрешённым origin получает Allow-Origin', healthCors.headers.get('access-control-allow-origin') === 'https://allowed.example.org');
 
   console.log('\nРегистрация и вход');
   const regA = await api('/api/register', { method: 'POST', body: JSON.stringify({ email: 'A@Example.com ', password: 'password-a1' }) });

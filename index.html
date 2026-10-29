@@ -173,6 +173,7 @@
       <section id="acctAnon">
         <p class="sheet-lead">Задачи можно вести без аккаунта — они останутся только на этом устройстве.
           Аккаунт добавляет синхронизацию между вашими устройствами.</p>
+        <p class="server-state" id="serverState" role="status">проверяем сервер…</p>
         <div class="btn-row">
           <button type="button" class="btn-primary" id="authLogin">Войти</button>
           <button type="button" class="btn-plain" id="authRegister">Создать аккаунт</button>
@@ -198,6 +199,24 @@
           <p class="sheet-note">Пароль хранится на сервере в виде scrypt-хэша. Данные аккаунта — ваши личные:
             другой пользователь их не видит.</p>
         </form>
+
+        <details class="api-base">
+          <summary>Сервер синхронизации</summary>
+          <p class="sheet-lead">По умолчанию аккаунты работают на том же адресе, с которого открыто приложение.
+            Если сайт лежит на статическом хостинге (GitHub Pages, Netlify), а <code>server.js</code> запущен
+            отдельно — укажите его адрес.</p>
+          <label class="field"><span>Адрес API</span>
+            <input id="apiBase" type="url" inputmode="url" autocapitalize="none" autocomplete="off"
+                   placeholder="https://tasks.example.com">
+          </label>
+          <div class="btn-row">
+            <button type="button" class="btn-plain" id="apiBaseSave">Сохранить и проверить</button>
+            <button type="button" class="btn-plain" id="apiBaseReset">Сбросить</button>
+          </div>
+          <p class="sheet-note">На сервере должен быть разрешён origin этого сайта:
+            <code>ALLOWED_ORIGINS=https://user.github.io node server.js</code>.
+            Проверить сервер можно, открыв <code>/api/health</code> в браузере.</p>
+        </details>
       </section>
 
       <section id="acctIn" hidden>

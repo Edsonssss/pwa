@@ -740,3 +740,33 @@ body.sheet-open .fab { opacity: 0; transform: scale(.6); pointer-events: none; }
   color: var(--secondary);
   text-align: center;
 }
+
+/* ============ Состояние сервера и адрес API ============ */
+.server-state {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--fill);
+  font-size: 13px; line-height: 1.35;
+  color: var(--secondary);
+  word-break: break-word;
+}
+.server-state.ok { color: var(--accent-text); background: var(--accent-soft); }
+.server-state.bad { color: var(--red); }
+
+.api-base { margin-top: 14px; }
+.api-base > summary {
+  cursor: pointer;
+  font-size: 14px; font-weight: 600;
+  color: var(--accent-text);
+  padding: 8px 0;
+  list-style: none;
+}
+.api-base > summary::-webkit-details-marker { display: none; }
+.api-base > summary::before { content: "› "; }
+.api-base[open] > summary::before { content: "⌄ "; }
+.api-base code {
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--label);
+  word-break: break-all;
+}

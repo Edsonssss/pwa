@@ -260,6 +260,9 @@ const fetchStub = async (url, opts = {}) => {
   const json = (data, status = 200) => ({
     ok: status < 400, status, json: async () => data,
   });
+  const route = new URL(String(url), 'https://local').pathname;
+  if (route === '/api/health') return json({ ok: true, name: 'pwa-tasks', version: '1.2.0' });
+  url = route;
   if (url === '/api/login' || url === '/api/register') {
     return json({ token: 'tok-123', user: { id: 'u1', email: 'anna@example.com' } });
   }
@@ -293,9 +296,38 @@ ok('mergeTasks: локальная свежее — остаётся',
 
 // --- вход с переносом локальных задач ---
 B.click(b$('#acctBtn'));
-await sleep(60);
+await sleep(80);
 ok('шторка аккаунта открыта (dialog)', !b$('#acctSheet').hidden && b$('#acctSheet').getAttribute('role') === 'dialog');
 ok('анонимный блок виден, авторизованный скрыт', !b$('#acctAnon').hidden && b$('#acctIn').hidden);
+ok('состояние сервера показано (role=status)', b$('#serverState').getAttribute('role') === 'status' && /отвечает/.test(b$('#serverState').textContent), b$('#serverState').textContent);
+ok('health отмечен как успешный', b$('#serverState').className.includes('ok'), b$('#serverState').className);
+
+// адрес отдельного сервера: сохраняется, нормализуется, сбрасывается
+b$('#apiBase').value = 'https://tasks.example.org/';
+B.click(b$('#apiBaseSave'));
+await sleep(100);
+ok('адрес API сохранён без хвостового слэша', B.store['pwa-tasks:api-base'] === 'https://tasks.example.org', B.store['pwa-tasks:api-base']);
+ok('health запрошен по внешнему адресу', apiCalls.some((c) => String(c.url).startsWith('https://tasks.example.org/api/health')), JSON.stringify(apiCalls.map((c) => c.url)));
+B.click(b$('#apiBaseReset'));
+await sleep(100);
+ok('сброс вернул свой origin', !B.store['pwa-tasks:api-base']);
+
+// API недоступен (статический хостинг / сервер упал) — причина видна пользователю
+const goodFetch = B.w.fetch;
+B.w.fetch = async () => { throw new TypeError('Failed to fetch'); };
+B.click(b$('#authRegister'));
+await sleep(40);
+b$('#authEmail').value = 'x@y.zz';
+b$('#authPassword').value = 'password123';
+b$('#authFields').dispatchEvent(new B.w.Event('submit', { bubbles: true, cancelable: true }));
+await sleep(150);
+const failMsg = b$('#authError').textContent;
+ok('при недоступном API показана причина, а не «проверьте сеть»', !b$('#authError').hidden && /статического хостинга|нет API|server\.js/i.test(failMsg), failMsg);
+ok('индикатор сервера переключился в ошибку', b$('#serverState').className.includes('bad'), b$('#serverState').className);
+ok('аккаунт не создан, задачи не тронуты', !B.store['pwa-tasks:account'] && B.w.__pwa.state.tasks.length === 3);
+B.w.fetch = goodFetch;
+await B.w.__pwa.probeServer?.() || sleep(0);
+
 B.click(b$('#authLogin'));
 await sleep(60);
 ok('форма входа раскрыта', !b$('#authFields').hidden && b$('#authModeTitle').textContent === 'Вход');

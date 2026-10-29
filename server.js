@@ -15,6 +15,12 @@ const crypto = require('crypto');
 const ROOT = __dirname;
 const PORT = Number(process.argv[2] || process.env.PORT || 8080);
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(ROOT, 'data'));
+const VERSION = '1.2.0';
+/* Разрешённые origin для кросс-доменного API (статика на Pages/Netlify, сервер отдельно):
+   ALLOWED_ORIGINS="https://user.github.io,https://app.netlify.app"  (или "*" — любой).
+   Пусто = только тот же origin, с которого отдан сайт. */
+const ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || '')
+  .split(',').map((o) => o.trim().replace(/\/+$/, '')).filter(Boolean);
 const TOKEN_TTL_MS = 30 * 24 * 3600 * 1000;
 const TOMBSTONE_TTL_MS = 30 * 24 * 3600 * 1000;
 const MAX_BODY = 1024 * 1024;
@@ -125,8 +131,22 @@ function send(res, code, body) {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': buf.length,
     'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
   });
   res.end(buf);
+}
+
+/* CORS: только явно разрешённые origin (echo + Vary), иначе заголовков нет вовсе. */
+function applyCors(req, res) {
+  const origin = req.headers.origin;
+  if (!origin || !ALLOWED_ORIGINS.length) return false;
+  if (!(ALLOWED_ORIGINS.includes('*') || ALLOWED_ORIGINS.includes(origin))) return false;
+  res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Max-Age', '600');
+  return true;
 }
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -148,6 +168,12 @@ function readBody(req) {
 async function handleAPI(req, res, url) {
   const ip = req.socket.remoteAddress || '?';
   const route = url.pathname;
+
+  // публичная проверка доступности: по ней клиент отличает «нет API на этом
+  // хостинге» от «нет сети» и показывает внятную ошибку вместо общей фразы
+  if (route === '/api/health' && req.method === 'GET') {
+    return send(res, 200, { ok: true, name: 'pwa-tasks', version: VERSION, time: Date.now() });
+  }
 
   if (route === '/api/register' || route === '/api/login') {
     if (rateLimited(ip)) return send(res, 429, { error: 'Слишком много попыток, подождите минуту' });
@@ -212,6 +238,18 @@ async function handleAPI(req, res, url) {
 }
 
 /* ---------------- статика ---------------- */
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data:",
+  // connect-src: свой origin + разрешённые адреса API (кросс-доменный режим)
+  "connect-src 'self'" + ALLOWED_ORIGINS.filter((o) => o !== '*').map((o) => ' ' + o).join(''),
+  "manifest-src 'self'",
+  "base-uri 'none'",
+  "form-action 'self'",
+].join('; ');
+
 function serveStatic(req, res, urlPath) {
   if (urlPath.endsWith('/')) urlPath += 'index.html';
   if (urlPath.split('/').some((seg) => seg.startsWith('.') || seg === 'node_modules' || seg === 'data')) {
@@ -227,7 +265,7 @@ function serveStatic(req, res, urlPath) {
       'Cache-Control': path.basename(file) === 'sw.js' ? 'no-cache' : 'no-store',
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'no-referrer',
-      "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'self'",
+      'Content-Security-Policy': CSP,
     });
     res.end(data);
   });
@@ -236,6 +274,8 @@ function serveStatic(req, res, urlPath) {
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname.startsWith('/api/')) {
+    applyCors(req, res);
+    if (req.method === 'OPTIONS') { res.writeHead(204).end(); return; }  // preflight
     handleAPI(req, res, url).catch(() => send(res, 500, { error: 'Внутренняя ошибка' }));
     return;
   }
@@ -244,5 +284,6 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`PWA + API: http://localhost:${PORT}/  (данные: ${DATA_DIR})`);
+  console.log(`PWA + API v${VERSION}: http://localhost:${PORT}/  (данные: ${DATA_DIR})`);
+  if (ALLOWED_ORIGINS.length) console.log(`CORS разрешён для: ${ALLOWED_ORIGINS.join(', ')}`);
 });
