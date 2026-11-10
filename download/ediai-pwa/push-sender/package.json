@@ -1,0 +1,18 @@
+{
+  "name": "ezhednik-push-sender",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Отправка push-напоминаний Ежедневника по расписанию (cron на хостинге)",
+  "main": "push-sender.mjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node push-sender.mjs",
+    "dry-run": "node push-sender.mjs --dry-run"
+  },
+  "dependencies": {
+    "web-push": "4.0.0"
+  }
+}

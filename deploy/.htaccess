@@ -1,0 +1,14 @@
+# Ежедневник PWA: служебная папка — не для поисковых систем.
+# Заголовок X-Robots-Tag запрещает индексацию ВСЕГО содержимого папки /pwa
+# (требуется модуль Apache mod_headers — на виртуальном хостинге AdminVPS включён).
+
+<IfModule mod_headers.c>
+    Header set X-Robots-Tag "noindex, nofollow"
+</IfModule>
+
+# api.php: не кэшировать ответы
+<FilesMatch "\.php$">
+    <IfModule mod_headers.c>
+        Header set Cache-Control "no-store, no-cache, must-revalidate"
+    </IfModule>
+</FilesMatch>

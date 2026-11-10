@@ -1,0 +1,12 @@
+{
+  "storageDir": "../pwa/storage",
+  "appUrl": "https://ediai.ru/pwa/",
+  "vapid": {
+    "publicKey": "BAWVggx3TiOGr6UxJIqhOpoMgpA_lFOt7lLlsBI3vthuqhCIXtjnmrY8Dh17bqjvtVbi6GspUxc4LSyGsyNDgkw",
+    "privateKey": "ВПИШИТЕ_ПРИВАТНЫЙ_КЛЮЧ_ИЗ_config.json_ИЗ_АРХИВА_ДЕПЛОЯ",
+    "subject": "mailto:admin@ediai.ru"
+  },
+  "windowMinutes": 15,
+  "staleSubscriptionDays": 60
+}
+

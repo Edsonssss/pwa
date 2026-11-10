@@ -1,0 +1,3 @@
+# Прямой доступ к файлу данных запрещён — данные отдаются только через api.php
+Require all denied
+Deny from all
